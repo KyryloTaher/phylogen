@@ -26,7 +26,8 @@ def fetch_metadata(ids, api_key):
             for k, v in zip(subtype, subname):
                 meta[k] = v
             meta["release_date"] = info.get("createdate", "")
-            metadata[uid] = meta
+            acc = info.get("accessionversion", uid)
+            metadata[acc] = meta
     return metadata
 
 def fetch_fasta(ids, api_key):
