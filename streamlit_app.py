@@ -81,7 +81,13 @@ def main():
         with open(fasta_file, "w") as f:
             for record in SeqIO.parse(io.StringIO(fasta_data), "fasta"):
                 meta = metadata.get(record.id, {})
-                header = f"{record.description} | host={meta.get('host','')} | country={meta.get('country','')} | collection_date={meta.get('collection_date','')} | release_date={meta.get('release_date','')}"
+                # Use only the accession ID in the header to avoid long descriptions
+                header = (
+                    f"{record.id} | host={meta.get('host','')} | "
+                    f"country={meta.get('country','')} | "
+                    f"collection_date={meta.get('collection_date','')} | "
+                    f"release_date={meta.get('release_date','')}"
+                )
                 f.write(f">{header}\n{record.seq}\n")
         st.download_button("Download Sequences", open(fasta_file, "rb"), file_name=fasta_file)
         ref_id, ref_fasta, features = fetch_refseq(taxon, api_key)
