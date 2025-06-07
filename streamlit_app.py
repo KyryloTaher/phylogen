@@ -38,13 +38,26 @@ def fetch_fasta(ids, api_key):
     sequences = []
     for chunk in [ids[i:i+500] for i in range(0, len(ids), 500)]:
         handle = Entrez.efetch(db="nuccore", id=",".join(chunk), rettype="fasta", retmode="text", api_key=api_key)
-        data = handle.read()
-        handle.close()
-        sequences.append(data)
-    return "".join(sequences)
-
-def fetch_refseq(taxon, api_key):
-    term = f"\"{taxon}\"[Organism] AND srcdb_refseq[PROP]"
+    email = st.text_input("NCBI Email")
+        if not email or not api_key or not taxon:
+            st.error("Please provide email, API key and taxon name")
+            return
+        Entrez.email = email
+        try:
+            ids = fetch_ids(taxon, api_key)
+        except Exception as e:
+            st.error(f"Failed to fetch sequence IDs: {e}")
+        try:
+            metadata = fetch_metadata(ids, api_key)
+            fasta_data = fetch_fasta(ids, api_key)
+        except Exception as e:
+            st.error(f"Failed to download sequence data: {e}")
+            return
+        try:
+            ref_id, ref_fasta, features = fetch_refseq(taxon, api_key)
+        except Exception as e:
+            st.error(f"Failed to fetch RefSeq: {e}")
+            return
     handle = Entrez.esearch(db="nuccore", term=term, retmax=1, api_key=api_key)
     record = Entrez.read(handle)
     handle.close()
