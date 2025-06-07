@@ -21,11 +21,6 @@ def fetch_metadata(ids, api_key):
         for uid in js.get("result", {}).get("uids", []):
             info = js["result"].get(uid, {})
             meta = {}
-            labels = info.get("subtype", "").split("|") if info.get("subtype") else []
-            values = info.get("subname", "").split("|") if info.get("subname") else []
-            for i, lab in enumerate(labels):
-                val = values[i] if i < len(values) else ""
-                meta[lab] = val
             subtype = info.get("subtype", "").split("|")
             subname = info.get("subname", "").split("|")
             for k, v in zip(subtype, subname):
@@ -61,8 +56,6 @@ def fetch_refseq(taxon, api_key):
     features = []
     for record in SeqIO.parse(io.StringIO(gb), "genbank"):
         for feat in record.features:
-            qual = "; ".join(f"{k}={','.join(v)}" for k, v in feat.qualifiers.items())
-            features.append(f"{feat.type}\t{feat.location}\t{qual}")
             features.append(f"{feat.type}: {feat.location}")
     return refseq_id, fasta, "\n".join(features)
 
@@ -87,15 +80,6 @@ def main():
         with open(fasta_file, "w") as f:
             for record in SeqIO.parse(io.StringIO(fasta_data), "fasta"):
                 meta = metadata.get(record.id, {})
-                header = (
-                    f"{record.id}"
-                    f" | isolate={meta.get('isolate','')}"
-                    f" | host={meta.get('host','')}"
-                    f" | country={meta.get('country','')}"
-                    f" | collection_date={meta.get('collection_date','')}"
-                    f" | release_date={meta.get('release_date','')}"
-                )
-
                 header = f"{record.description} | host={meta.get('host','')} | country={meta.get('country','')} | collection_date={meta.get('collection_date','')} | release_date={meta.get('release_date','')}"
                 f.write(f">{header}\n{record.seq}\n")
         st.download_button("Download Sequences", open(fasta_file, "rb"), file_name=fasta_file)
