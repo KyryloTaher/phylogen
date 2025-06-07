@@ -26,6 +26,10 @@ def fetch_metadata(ids, api_key):
             for i, lab in enumerate(labels):
                 val = values[i] if i < len(values) else ""
                 meta[lab] = val
+            subtype = info.get("subtype", "").split("|")
+            subname = info.get("subname", "").split("|")
+            for k, v in zip(subtype, subname):
+                meta[k] = v
             meta["release_date"] = info.get("createdate", "")
             metadata[uid] = meta
     return metadata
@@ -59,6 +63,7 @@ def fetch_refseq(taxon, api_key):
         for feat in record.features:
             qual = "; ".join(f"{k}={','.join(v)}" for k, v in feat.qualifiers.items())
             features.append(f"{feat.type}\t{feat.location}\t{qual}")
+            features.append(f"{feat.type}: {feat.location}")
     return refseq_id, fasta, "\n".join(features)
 
 def main():
@@ -90,6 +95,8 @@ def main():
                     f" | collection_date={meta.get('collection_date','')}"
                     f" | release_date={meta.get('release_date','')}"
                 )
+
+                header = f"{record.description} | host={meta.get('host','')} | country={meta.get('country','')} | collection_date={meta.get('collection_date','')} | release_date={meta.get('release_date','')}"
                 f.write(f">{header}\n{record.seq}\n")
         st.download_button("Download Sequences", open(fasta_file, "rb"), file_name=fasta_file)
         ref_id, ref_fasta, features = fetch_refseq(taxon, api_key)
