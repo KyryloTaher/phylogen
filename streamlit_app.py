@@ -11,13 +11,28 @@ def fetch_ids(taxon, api_key):
     return record.get("IdList", [])
 
 def fetch_metadata(ids, api_key):
+    """Return metadata for each accession in *ids*.
+
+    The function first queries ``esummary`` to retrieve the basic mapping from
+    UID to accession and any available metadata.  Some records lack host,
+    country or collection date in ``esummary`` so we additionally fetch the
+    GenBank record and parse the ``source`` feature to fill in any missing
+    fields.
+    """
+
+    import json
+
     metadata = {}
-    for chunk in [ids[i:i+200] for i in range(0, len(ids), 200)]:
-        handle = Entrez.esummary(db="nuccore", id=",".join(chunk), retmode="json", api_key=api_key)
-        data = handle.read()
+
+    # Fetch summary metadata for quick access to release dates and mapping to
+    # accession.version identifiers.
+    for chunk in [ids[i:i + 200] for i in range(0, len(ids), 200)]:
+        handle = Entrez.esummary(
+            db="nuccore", id=",".join(chunk), retmode="json", api_key=api_key
+        )
+        js = json.load(handle)
         handle.close()
-        import json
-        js = json.loads(data)
+
         for uid in js.get("result", {}).get("uids", []):
             info = js["result"].get(uid, {})
             meta = {}
@@ -28,6 +43,33 @@ def fetch_metadata(ids, api_key):
             meta["release_date"] = info.get("createdate", "")
             acc = info.get("accessionversion", uid)
             metadata[acc] = meta
+
+    # Retrieve GenBank records to capture missing metadata such as host or
+    # collection_date.
+    for chunk in [list(metadata.keys())[i:i + 100] for i in range(0, len(metadata), 100)]:
+        handle = Entrez.efetch(
+            db="nuccore", id=",".join(chunk), rettype="gb", retmode="text", api_key=api_key
+        )
+        for record in SeqIO.parse(handle, "genbank"):
+            meta = metadata.setdefault(record.id, {})
+            # Fill release date from record annotations if missing.
+            meta.setdefault("release_date", record.annotations.get("date", ""))
+            for feat in record.features:
+                if feat.type == "source":
+                    q = feat.qualifiers
+                    if "isolate" in q and not meta.get("isolate"):
+                        meta["isolate"] = q["isolate"][0]
+                    if "host" in q and not meta.get("host"):
+                        meta["host"] = q["host"][0]
+                    if "country" in q and not meta.get("country"):
+                        meta["country"] = q["country"][0]
+                    if "geo_loc_name" in q and not meta.get("country"):
+                        meta["country"] = q["geo_loc_name"][0]
+                    if "collection_date" in q and not meta.get("collection_date"):
+                        meta["collection_date"] = q["collection_date"][0]
+                    break
+        handle.close()
+
     return metadata
 
 def fetch_fasta(ids, api_key):
@@ -83,7 +125,8 @@ def main():
                 meta = metadata.get(record.id, {})
                 # Use only the accession ID in the header to avoid long descriptions
                 header = (
-                    f"{record.id} | host={meta.get('host','')} | "
+                    f"{record.id} | isolate={meta.get('isolate','')} | "
+                    f"host={meta.get('host','')} | "
                     f"country={meta.get('country','')} | "
                     f"collection_date={meta.get('collection_date','')} | "
                     f"release_date={meta.get('release_date','')}"
