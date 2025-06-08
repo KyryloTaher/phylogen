@@ -2,6 +2,7 @@ import streamlit as st
 from Bio import Entrez, SeqIO
 import io
 import os
+import zipfile
 
 def fetch_ids(taxon, api_key):
     search_term = f"\"{taxon}\"[Organism]"
@@ -81,6 +82,20 @@ def fetch_fasta(ids, api_key):
         sequences.append(data)
     return "".join(sequences)
 
+def fetch_all_features(ids, api_key):
+    """Return features for all sequences in *ids* as a single string."""
+    lines = []
+    for chunk in [ids[i:i + 100] for i in range(0, len(ids), 100)]:
+        handle = Entrez.efetch(
+            db="nuccore", id=",".join(chunk), rettype="gb", retmode="text", api_key=api_key
+        )
+        for record in SeqIO.parse(handle, "genbank"):
+            lines.append(f">{record.id}")
+            for feat in record.features:
+                lines.append(f"{feat.type}: {feat.location}")
+        handle.close()
+    return "\n".join(lines)
+
 def fetch_refseq(taxon, api_key):
     term = f"\"{taxon}\"[Organism] AND srcdb_refseq[PROP]"
     handle = Entrez.esearch(db="nuccore", term=term, retmax=1, api_key=api_key)
@@ -118,6 +133,7 @@ def main():
         st.write(f"Found {len(ids)} sequences")
         metadata = fetch_metadata(ids, api_key)
         fasta_data = fetch_fasta(ids, api_key)
+        features_data = fetch_all_features(ids, api_key)
         base = taxon.replace(" ", "_")
         fasta_file = f"{base}.fasta"
         with open(fasta_file, "w") as f:
@@ -133,6 +149,10 @@ def main():
                 )
                 f.write(f">{header}\n{record.seq}\n")
         st.download_button("Download Sequences", open(fasta_file, "rb"), file_name=fasta_file)
+        seq_feat_file = f"{base}_sequences_features.txt"
+        with open(seq_feat_file, "w") as f:
+            f.write(features_data)
+        output_files = [fasta_file, seq_feat_file]
         ref_id, ref_fasta, features = fetch_refseq(taxon, api_key)
         if ref_id:
             ref_file = f"{base}_refseq.fasta"
@@ -141,10 +161,16 @@ def main():
             feat_file = f"{base}_features.txt"
             with open(feat_file, "w") as f:
                 f.write(features)
+            output_files.extend([ref_file, feat_file])
             st.download_button("Download RefSeq", open(ref_file, "rb"), file_name=ref_file)
             st.download_button("Download Features", open(feat_file, "rb"), file_name=feat_file)
         else:
             st.write("No refseq found for this taxon")
+        zip_file = f"{base}_outputs.zip"
+        with zipfile.ZipFile(zip_file, "w") as zf:
+            for fpath in output_files:
+                zf.write(fpath, arcname=os.path.basename(fpath))
+        st.download_button("Download All Outputs", open(zip_file, "rb"), file_name=zip_file, mime="application/zip")
 
 if __name__ == "__main__":
     main()
