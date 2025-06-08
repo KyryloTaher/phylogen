@@ -1,8 +1,12 @@
 import streamlit as st
 from Bio import Entrez, SeqIO
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
 import io
 import os
 import zipfile
+import tempfile
+import subprocess
 
 def fetch_ids(taxon, api_key):
     search_term = f"\"{taxon}\"[Organism]"
@@ -117,6 +121,106 @@ def fetch_refseq(taxon, api_key):
             features.append(f"{feat.type}: {feat.location}")
     return refseq_id, fasta, "\n".join(features)
 
+
+def _parse_partitions(record):
+    """Return 5'UTR, CDS and 3'UTR sequences from a GenBank record."""
+    utr5 = Seq("")
+    utr3 = Seq("")
+    cds_seq = None
+    cds_loc = None
+    for feat in record.features:
+        if feat.type == "CDS" and cds_seq is None:
+            cds_seq = feat.extract(record.seq)
+            cds_loc = feat.location
+        elif feat.type in {"5'UTR", "five_prime_UTR"}:
+            utr5 = feat.extract(record.seq)
+        elif feat.type in {"3'UTR", "three_prime_UTR"}:
+            utr3 = feat.extract(record.seq)
+    if cds_seq is None:
+        cds_seq = record.seq
+        cds_loc = record.features[0].location if record.features else None
+    if cds_loc is not None:
+        start = int(cds_loc.start)
+        end = int(cds_loc.end)
+        if not utr5:
+            utr5 = record.seq[:start]
+        if not utr3:
+            utr3 = record.seq[end:]
+    return utr5, cds_seq, utr3
+
+
+def _run_mafft(records):
+    """Align a list of SeqRecord objects with MAFFT L-INS-i."""
+    if not records:
+        return []
+    with tempfile.TemporaryDirectory() as tmpdir:
+        in_f = os.path.join(tmpdir, "in.fasta")
+        SeqIO.write(records, in_f, "fasta")
+        result = subprocess.run(
+            ["mafft", "--localpair", "--maxiterate", "1000", in_f],
+            capture_output=True, text=True, check=True
+        )
+        return list(SeqIO.parse(io.StringIO(result.stdout), "fasta"))
+
+
+def _align_translate_back(cds_records):
+    """Translate CDS, align amino acids and back-translate to nucleotides."""
+    aa_records = []
+    codons = {}
+    for rec in cds_records:
+        codon_list = [str(rec.seq[i:i+3]) for i in range(0, len(rec.seq), 3)]
+        codons[rec.id] = codon_list
+        aa_records.append(SeqRecord(rec.seq.translate(to_stop=False), id=rec.id))
+    aligned_aa = _run_mafft(aa_records)
+    aligned_nt = {}
+    for rec in aligned_aa:
+        codon_list = codons[rec.id]
+        idx = 0
+        nt_frag = []
+        for aa in str(rec.seq):
+            if aa == "-":
+                nt_frag.append("---")
+            else:
+                nt_frag.append(codon_list[idx])
+                idx += 1
+        aligned_nt[rec.id] = SeqRecord(Seq("".join(nt_frag)), id=rec.id)
+    return aligned_nt
+
+
+def partition_and_align(fasta_file, ids, api_key):
+    """Partition sequences into UTRs and CDS and align each part."""
+    records = list(SeqIO.parse(fasta_file, "fasta"))
+    order = [rec.id for rec in records]
+    partitions = {}
+    for chunk in [ids[i:i + 50] for i in range(0, len(ids), 50)]:
+        handle = Entrez.efetch(
+            db="nuccore", id=",".join(chunk), rettype="gb", retmode="text", api_key=api_key
+        )
+        for record in SeqIO.parse(handle, "genbank"):
+            utr5, cds, utr3 = _parse_partitions(record)
+            partitions[record.id] = {"utr5": utr5, "cds": cds, "utr3": utr3}
+        handle.close()
+    utr5_recs = [SeqRecord(partitions[i]["utr5"], id=i) for i in order]
+    cds_recs = [SeqRecord(partitions[i]["cds"], id=i) for i in order]
+    utr3_recs = [SeqRecord(partitions[i]["utr3"], id=i) for i in order]
+
+    aligned_utr5 = {r.id: r for r in _run_mafft(utr5_recs)}
+    aligned_cds = _align_translate_back(cds_recs)
+    aligned_utr3 = {r.id: r for r in _run_mafft(utr3_recs)}
+
+    final_records = []
+    for i in order:
+        seq = (
+            aligned_utr5.get(i, SeqRecord(Seq(""))).seq
+            + aligned_cds.get(i, SeqRecord(Seq(""))).seq
+            + aligned_utr3.get(i, SeqRecord(Seq(""))).seq
+        )
+        final_records.append(SeqRecord(seq, id=i))
+
+    output = io.StringIO()
+    SeqIO.write(final_records, output, "fasta")
+    return output.getvalue()
+
 def main():
     st.title("NCBI Virus Fetcher")
     api_key = st.text_input("NCBI API Key")
@@ -149,6 +253,8 @@ def main():
                 )
                 f.write(f">{header}\n{record.seq}\n")
         st.download_button("Download Sequences", open(fasta_file, "rb"), file_name=fasta_file)
+        st.session_state['fasta_file'] = fasta_file
+        st.session_state['ids'] = ids
         seq_feat_file = f"{base}_sequences_features.txt"
         with open(seq_feat_file, "w") as f:
             f.write(features_data)
@@ -171,6 +277,21 @@ def main():
             for fpath in output_files:
                 zf.write(fpath, arcname=os.path.basename(fpath))
         st.download_button("Download All Outputs", open(zip_file, "rb"), file_name=zip_file, mime="application/zip")
+        if st.button("Partition and Align"):
+            fasta_path = st.session_state.get('fasta_file')
+            id_list = st.session_state.get('ids')
+            if not fasta_path or not id_list:
+                st.error("Please fetch data first")
+            else:
+                aligned = partition_and_align(fasta_path, id_list, api_key)
+                align_file = f"{base}_partitioned_alignment.fasta"
+                with open(align_file, "w") as af:
+                    af.write(aligned)
+                st.download_button(
+                    "Download Partitioned Alignment",
+                    open(align_file, "rb"),
+                    file_name=align_file,
+                )
 
 if __name__ == "__main__":
     main()
