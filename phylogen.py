@@ -8,6 +8,8 @@ import zipfile
 import tempfile
 import subprocess
 import shutil
+from datetime import datetime
+from pathlib import Path
 
 def fetch_ids(taxon, api_key):
     search_term = f"\"{taxon}\"[Organism]"
@@ -232,6 +234,13 @@ def main():
     api_key = input("NCBI API Key: ").strip()
     taxon = input("Taxon Name [Potyvirus]: ").strip() or "Potyvirus"
     base = taxon.replace(" ", "_")
+
+    # Determine output directory within the user's home/projects/phylogen folder
+    base_dir = Path.home() / "projects" / "phylogen"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = base_dir / f"outputs_{timestamp}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Outputs will be stored in {output_dir}")
     if not api_key or not taxon:
         print("Please provide both API key and taxon name")
         return
@@ -249,7 +258,7 @@ def main():
     fasta_data = fetch_fasta(ids, api_key)
     features_data = fetch_all_features(ids, api_key)
 
-    fasta_file = f"{base}.fasta"
+    fasta_file = output_dir / f"{base}.fasta"
     with open(fasta_file, "w") as f:
         for record in SeqIO.parse(io.StringIO(fasta_data), "fasta"):
             meta = metadata.get(record.id, {})
@@ -263,17 +272,17 @@ def main():
             f.write(f">{header}\n{record.seq}\n")
     print(f"Sequences written to {fasta_file}")
 
-    seq_feat_file = f"{base}_sequences_features.txt"
+    seq_feat_file = output_dir / f"{base}_sequences_features.txt"
     with open(seq_feat_file, "w") as f:
         f.write(features_data)
     output_files = [fasta_file, seq_feat_file]
 
     ref_id, ref_fasta, features = fetch_refseq(taxon, api_key)
     if ref_id:
-        ref_file = f"{base}_refseq.fasta"
+        ref_file = output_dir / f"{base}_refseq.fasta"
         with open(ref_file, "w") as f:
             f.write(ref_fasta)
-        feat_file = f"{base}_features.txt"
+        feat_file = output_dir / f"{base}_features.txt"
         with open(feat_file, "w") as f:
             f.write(features)
         output_files.extend([ref_file, feat_file])
@@ -282,16 +291,16 @@ def main():
     else:
         print("No refseq found for this taxon")
 
-    zip_file = f"{base}_outputs.zip"
+    zip_file = output_dir / f"{base}_outputs.zip"
     with zipfile.ZipFile(zip_file, "w") as zf:
         for fpath in output_files:
-            zf.write(fpath, arcname=os.path.basename(fpath))
+            zf.write(str(fpath), arcname=os.path.basename(str(fpath)))
     print(f"All outputs archived to {zip_file}")
 
     choice = input("Partition and align sequences? [y/N]: ").strip().lower()
     if choice == "y":
         aligned = partition_and_align(fasta_file, ids, api_key)
-        align_file = f"{base}_partitioned_alignment.fasta"
+        align_file = output_dir / f"{base}_partitioned_alignment.fasta"
         with open(align_file, "w") as af:
             af.write(aligned)
         print(f"Partitioned alignment written to {align_file}")
