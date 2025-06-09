@@ -225,6 +225,7 @@ def main():
     st.title("NCBI Virus Fetcher")
     api_key = st.text_input("NCBI API Key")
     taxon = st.text_input("Taxon Name", "Potyvirus")
+    base = taxon.replace(" ", "_")
     if st.button("Fetch Data"):
         if not api_key or not taxon:
             st.error("Please provide both API key and taxon name")
@@ -238,7 +239,6 @@ def main():
         metadata = fetch_metadata(ids, api_key)
         fasta_data = fetch_fasta(ids, api_key)
         features_data = fetch_all_features(ids, api_key)
-        base = taxon.replace(" ", "_")
         fasta_file = f"{base}.fasta"
         with open(fasta_file, "w") as f:
             for record in SeqIO.parse(io.StringIO(fasta_data), "fasta"):
@@ -255,6 +255,7 @@ def main():
         st.download_button("Download Sequences", open(fasta_file, "rb"), file_name=fasta_file)
         st.session_state['fasta_file'] = fasta_file
         st.session_state['ids'] = ids
+        st.session_state['base'] = base
         seq_feat_file = f"{base}_sequences_features.txt"
         with open(seq_feat_file, "w") as f:
             f.write(features_data)
@@ -277,21 +278,23 @@ def main():
             for fpath in output_files:
                 zf.write(fpath, arcname=os.path.basename(fpath))
         st.download_button("Download All Outputs", open(zip_file, "rb"), file_name=zip_file, mime="application/zip")
-        if st.button("Partition and Align"):
-            fasta_path = st.session_state.get('fasta_file')
-            id_list = st.session_state.get('ids')
-            if not fasta_path or not id_list:
-                st.error("Please fetch data first")
-            else:
-                aligned = partition_and_align(fasta_path, id_list, api_key)
-                align_file = f"{base}_partitioned_alignment.fasta"
-                with open(align_file, "w") as af:
-                    af.write(aligned)
-                st.download_button(
-                    "Download Partitioned Alignment",
-                    open(align_file, "rb"),
-                    file_name=align_file,
-                )
+
+    if st.button("Partition and Align"):
+        fasta_path = st.session_state.get('fasta_file')
+        id_list = st.session_state.get('ids')
+        base = st.session_state.get('base', base)
+        if not fasta_path or not id_list:
+            st.error("Please fetch data first")
+        else:
+            aligned = partition_and_align(fasta_path, id_list, api_key)
+            align_file = f"{base}_partitioned_alignment.fasta"
+            with open(align_file, "w") as af:
+                af.write(aligned)
+            st.download_button(
+                "Download Partitioned Alignment",
+                open(align_file, "rb"),
+                file_name=align_file,
+            )
 
 if __name__ == "__main__":
     main()
