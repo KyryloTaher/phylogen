@@ -1,11 +1,12 @@
 from Bio import Entrez, SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
+from Bio.Align.Applications import MafftCommandline
 import io
 import os
 import zipfile
 import tempfile
-import subprocess
+import shutil
 
 def fetch_ids(taxon, api_key):
     search_term = f"\"{taxon}\"[Organism]"
@@ -152,14 +153,19 @@ def _run_mafft(records):
     """Align a list of SeqRecord objects with MAFFT L-INS-i."""
     if not records:
         return []
+    mafft_path = shutil.which("mafft")
+    if mafft_path is None:
+        raise FileNotFoundError(
+            "MAFFT executable not found. Please install MAFFT and ensure it is in your PATH."
+        )
     with tempfile.TemporaryDirectory() as tmpdir:
         in_f = os.path.join(tmpdir, "in.fasta")
         SeqIO.write(records, in_f, "fasta")
-        result = subprocess.run(
-            ["mafft", "--localpair", "--maxiterate", "1000", in_f],
-            capture_output=True, text=True, check=True
+        mafft_cline = MafftCommandline(
+            cmd=mafft_path, localpair=True, maxiterate=1000, input=in_f
         )
-        return list(SeqIO.parse(io.StringIO(result.stdout), "fasta"))
+        stdout, stderr = mafft_cline()
+        return list(SeqIO.parse(io.StringIO(stdout), "fasta"))
 
 
 def _align_translate_back(cds_records):

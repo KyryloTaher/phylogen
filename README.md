@@ -8,6 +8,11 @@ This repository contains a small command line tool that queries NCBI for virus s
 pip install -r requirements.txt
 ```
 
+The optional partitioning and alignment step uses Biopython's
+`MafftCommandline` wrapper and requires the external
+[MAFFT](https://mafft.cbrc.jp/alignment/software/) executable to be
+installed and available on your `PATH`.
+
 ## Usage
 
 Run the script:
