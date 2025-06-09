@@ -1,7 +1,6 @@
 from Bio import Entrez, SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-from Bio.Align.Applications import MafftCommandline
 import io
 import os
 import zipfile
@@ -164,11 +163,11 @@ def _run_mafft(records):
     with tempfile.TemporaryDirectory() as tmpdir:
         in_f = os.path.join(tmpdir, "in.fasta")
         SeqIO.write(records, in_f, "fasta")
-        mafft_cline = MafftCommandline(
-            cmd=mafft_path, localpair=True, maxiterate=1000, input=in_f
+        cmd = [mafft_path, "--localpair", "--maxiterate", "1000", in_f]
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=True
         )
-        stdout, _ = mafft_cline()
-        return list(SeqIO.parse(io.StringIO(stdout), "fasta"))
+        return list(SeqIO.parse(io.StringIO(result.stdout), "fasta"))
 
 
 def _align_translate_back(cds_records):
