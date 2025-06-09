@@ -175,9 +175,13 @@ def _align_translate_back(cds_records):
     aa_records = []
     codons = {}
     for rec in cds_records:
-        codon_list = [str(rec.seq[i:i+3]) for i in range(0, len(rec.seq), 3)]
+        seq = rec.seq
+        if len(seq) % 3:
+            pad = 3 - len(seq) % 3
+            seq = seq + Seq("N" * pad)
+        codon_list = [str(seq[i:i+3]) for i in range(0, len(seq), 3)]
         codons[rec.id] = codon_list
-        aa_records.append(SeqRecord(rec.seq.translate(to_stop=False), id=rec.id))
+        aa_records.append(SeqRecord(seq.translate(to_stop=False), id=rec.id))
     aligned_aa = _run_mafft(aa_records)
     aligned_nt = {}
     for rec in aligned_aa:
