@@ -1,6 +1,6 @@
 # Phylogen Virus Fetcher
 
-This repository contains a small Streamlit application that queries NCBI for virus sequences by taxon name. The app uses NCBI's Entrez API to download sequences and metadata as well as a reference sequence with its annotated features.
+This repository contains a small command line tool that queries NCBI for virus sequences by taxon name. It uses NCBI's Entrez API to download sequences and metadata as well as a reference sequence with its annotated features.
 
 ## Requirements
 
@@ -10,15 +10,14 @@ pip install -r requirements.txt
 
 ## Usage
 
-Run the Streamlit application:
+Run the script:
 
 ```
-streamlit run streamlit_app.py
+python phylogen.py
 ```
 
-Provide your NCBI API key and a taxon name (e.g. `Potyvirus`). The app will
-produce several downloadable files which are also bundled into a single zip
-archive:
+The program will prompt for your NCBI API key and a taxon name (e.g. `Potyvirus`).
+It produces several files which are also bundled into a single zip archive:
 
 - `<Taxon_Name>.fasta` – all sequences with isolate, host, country,
   collection date and release date in the headers. Metadata is gathered from

@@ -1,4 +1,3 @@
-import streamlit as st
 from Bio import Entrez, SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
@@ -222,79 +221,74 @@ def partition_and_align(fasta_file, ids, api_key):
     return output.getvalue()
 
 def main():
-    st.title("NCBI Virus Fetcher")
-    api_key = st.text_input("NCBI API Key")
-    taxon = st.text_input("Taxon Name", "Potyvirus")
+    print("NCBI Virus Fetcher")
+    api_key = input("NCBI API Key: ").strip()
+    taxon = input("Taxon Name [Potyvirus]: ").strip() or "Potyvirus"
     base = taxon.replace(" ", "_")
-    if st.button("Fetch Data"):
-        if not api_key or not taxon:
-            st.error("Please provide both API key and taxon name")
-            return
-        Entrez.email = "example@example.com"
-        ids = fetch_ids(taxon, api_key)
-        if not ids:
-            st.error("No sequences found")
-            return
-        st.write(f"Found {len(ids)} sequences")
-        metadata = fetch_metadata(ids, api_key)
-        fasta_data = fetch_fasta(ids, api_key)
-        features_data = fetch_all_features(ids, api_key)
-        fasta_file = f"{base}.fasta"
-        with open(fasta_file, "w") as f:
-            for record in SeqIO.parse(io.StringIO(fasta_data), "fasta"):
-                meta = metadata.get(record.id, {})
-                # Use only the accession ID in the header to avoid long descriptions
-                header = (
-                    f"{record.id} | isolate={meta.get('isolate','')} | "
-                    f"host={meta.get('host','')} | "
-                    f"country={meta.get('country','')} | "
-                    f"collection_date={meta.get('collection_date','')} | "
-                    f"release_date={meta.get('release_date','')}"
-                )
-                f.write(f">{header}\n{record.seq}\n")
-        st.download_button("Download Sequences", open(fasta_file, "rb"), file_name=fasta_file)
-        st.session_state['fasta_file'] = fasta_file
-        st.session_state['ids'] = ids
-        st.session_state['base'] = base
-        seq_feat_file = f"{base}_sequences_features.txt"
-        with open(seq_feat_file, "w") as f:
-            f.write(features_data)
-        output_files = [fasta_file, seq_feat_file]
-        ref_id, ref_fasta, features = fetch_refseq(taxon, api_key)
-        if ref_id:
-            ref_file = f"{base}_refseq.fasta"
-            with open(ref_file, "w") as f:
-                f.write(ref_fasta)
-            feat_file = f"{base}_features.txt"
-            with open(feat_file, "w") as f:
-                f.write(features)
-            output_files.extend([ref_file, feat_file])
-            st.download_button("Download RefSeq", open(ref_file, "rb"), file_name=ref_file)
-            st.download_button("Download Features", open(feat_file, "rb"), file_name=feat_file)
-        else:
-            st.write("No refseq found for this taxon")
-        zip_file = f"{base}_outputs.zip"
-        with zipfile.ZipFile(zip_file, "w") as zf:
-            for fpath in output_files:
-                zf.write(fpath, arcname=os.path.basename(fpath))
-        st.download_button("Download All Outputs", open(zip_file, "rb"), file_name=zip_file, mime="application/zip")
+    if not api_key or not taxon:
+        print("Please provide both API key and taxon name")
+        return
 
-    if st.button("Partition and Align"):
-        fasta_path = st.session_state.get('fasta_file')
-        id_list = st.session_state.get('ids')
-        base = st.session_state.get('base', base)
-        if not fasta_path or not id_list:
-            st.error("Please fetch data first")
-        else:
-            aligned = partition_and_align(fasta_path, id_list, api_key)
-            align_file = f"{base}_partitioned_alignment.fasta"
-            with open(align_file, "w") as af:
-                af.write(aligned)
-            st.download_button(
-                "Download Partitioned Alignment",
-                open(align_file, "rb"),
-                file_name=align_file,
+    Entrez.email = "example@example.com"
+
+    print("Fetching data from NCBI...")
+    ids = fetch_ids(taxon, api_key)
+    if not ids:
+        print("No sequences found")
+        return
+    print(f"Found {len(ids)} sequences")
+
+    metadata = fetch_metadata(ids, api_key)
+    fasta_data = fetch_fasta(ids, api_key)
+    features_data = fetch_all_features(ids, api_key)
+
+    fasta_file = f"{base}.fasta"
+    with open(fasta_file, "w") as f:
+        for record in SeqIO.parse(io.StringIO(fasta_data), "fasta"):
+            meta = metadata.get(record.id, {})
+            header = (
+                f"{record.id} | isolate={meta.get('isolate','')} | "
+                f"host={meta.get('host','')} | "
+                f"country={meta.get('country','')} | "
+                f"collection_date={meta.get('collection_date','')} | "
+                f"release_date={meta.get('release_date','')}"
             )
+            f.write(f">{header}\n{record.seq}\n")
+    print(f"Sequences written to {fasta_file}")
+
+    seq_feat_file = f"{base}_sequences_features.txt"
+    with open(seq_feat_file, "w") as f:
+        f.write(features_data)
+    output_files = [fasta_file, seq_feat_file]
+
+    ref_id, ref_fasta, features = fetch_refseq(taxon, api_key)
+    if ref_id:
+        ref_file = f"{base}_refseq.fasta"
+        with open(ref_file, "w") as f:
+            f.write(ref_fasta)
+        feat_file = f"{base}_features.txt"
+        with open(feat_file, "w") as f:
+            f.write(features)
+        output_files.extend([ref_file, feat_file])
+        print(f"RefSeq written to {ref_file}")
+        print(f"Features written to {feat_file}")
+    else:
+        print("No refseq found for this taxon")
+
+    zip_file = f"{base}_outputs.zip"
+    with zipfile.ZipFile(zip_file, "w") as zf:
+        for fpath in output_files:
+            zf.write(fpath, arcname=os.path.basename(fpath))
+    print(f"All outputs archived to {zip_file}")
+
+    choice = input("Partition and align sequences? [y/N]: ").strip().lower()
+    if choice == "y":
+        aligned = partition_and_align(fasta_file, ids, api_key)
+        align_file = f"{base}_partitioned_alignment.fasta"
+        with open(align_file, "w") as af:
+            af.write(aligned)
+        print(f"Partitioned alignment written to {align_file}")
 
 if __name__ == "__main__":
     main()
+
