@@ -153,16 +153,22 @@ def _run_mafft(records):
     """Align a list of SeqRecord objects with MAFFT L-INS-i."""
     if not records:
         return []
-    if shutil.which("mafft") is None:
+    mafft_path = shutil.which("mafft")
+    if mafft_path is None:
         raise FileNotFoundError(
             "MAFFT executable not found. Please install MAFFT and ensure it is in your PATH."
         )
     with tempfile.TemporaryDirectory() as tmpdir:
         in_f = os.path.join(tmpdir, "in.fasta")
         SeqIO.write(records, in_f, "fasta")
+        cmd = [mafft_path, "--localpair", "--maxiterate", "1000", in_f]
+        use_shell = os.name == "nt" and mafft_path.lower().endswith((".bat", ".cmd"))
         result = subprocess.run(
-            ["mafft", "--localpair", "--maxiterate", "1000", in_f],
-            capture_output=True, text=True, check=True
+            cmd if not use_shell else " ".join(cmd),
+            capture_output=True,
+            text=True,
+            check=True,
+            shell=use_shell,
         )
         return list(SeqIO.parse(io.StringIO(result.stdout), "fasta"))
 
