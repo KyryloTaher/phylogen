@@ -6,6 +6,7 @@ import os
 import zipfile
 import tempfile
 import subprocess
+import shutil
 
 def fetch_ids(taxon, api_key):
     search_term = f"\"{taxon}\"[Organism]"
@@ -152,6 +153,10 @@ def _run_mafft(records):
     """Align a list of SeqRecord objects with MAFFT L-INS-i."""
     if not records:
         return []
+    if shutil.which("mafft") is None:
+        raise FileNotFoundError(
+            "MAFFT executable not found. Please install MAFFT and ensure it is in your PATH."
+        )
     with tempfile.TemporaryDirectory() as tmpdir:
         in_f = os.path.join(tmpdir, "in.fasta")
         SeqIO.write(records, in_f, "fasta")
