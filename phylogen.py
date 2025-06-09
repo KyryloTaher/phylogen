@@ -156,7 +156,6 @@ def _run_mafft(records):
         return []
     mafft_path = shutil.which("mafft")
     if mafft_path is None:
-    if shutil.which("mafft") is None:
         raise FileNotFoundError(
             "MAFFT executable not found. Please install MAFFT and ensure it is in your PATH."
         )
@@ -166,7 +165,7 @@ def _run_mafft(records):
         mafft_cline = MafftCommandline(
             cmd=mafft_path, localpair=True, maxiterate=1000, input=in_f
         )
-        stdout, stderr = mafft_cline()
+        stdout, _ = mafft_cline()
         return list(SeqIO.parse(io.StringIO(stdout), "fasta"))
 
 
