@@ -6,6 +6,7 @@ import io
 import os
 import zipfile
 import tempfile
+import subprocess
 import shutil
 
 def fetch_ids(taxon, api_key):
@@ -155,6 +156,7 @@ def _run_mafft(records):
         return []
     mafft_path = shutil.which("mafft")
     if mafft_path is None:
+    if shutil.which("mafft") is None:
         raise FileNotFoundError(
             "MAFFT executable not found. Please install MAFFT and ensure it is in your PATH."
         )
