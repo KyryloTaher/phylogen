@@ -31,3 +31,7 @@ It produces several files which are also bundled into a single zip archive:
 - `<Taxon_Name>_refseq.fasta` – the RefSeq sequence for the taxon (if available).
 - `<Taxon_Name>_features.txt` – list of features (UTRs, CDS, mat_peptides, etc.) from the RefSeq record.
 - `<Taxon_Name>_outputs.zip` – archive containing all of the above files for easy download.
+
+Optionally, the script can align all coding sequences (CDSs) using MAFFT. If selected,
+an additional file `<Taxon_Name>_cds_alignment.fasta` containing the translated,
+aligned and back-translated CDSs will be produced.

@@ -124,31 +124,15 @@ def fetch_refseq(taxon, api_key):
     return refseq_id, fasta, "\n".join(features)
 
 
-def _parse_partitions(record):
-    """Return 5'UTR, CDS and 3'UTR sequences from a GenBank record."""
-    utr5 = Seq("")
-    utr3 = Seq("")
-    cds_seq = None
-    cds_loc = None
+def _extract_cds_features(record):
+    """Return all CDS sequences from a GenBank record."""
+    cds_list = []
     for feat in record.features:
-        if feat.type == "CDS" and cds_seq is None:
-            cds_seq = feat.extract(record.seq)
-            cds_loc = feat.location
-        elif feat.type in {"5'UTR", "five_prime_UTR"}:
-            utr5 = feat.extract(record.seq)
-        elif feat.type in {"3'UTR", "three_prime_UTR"}:
-            utr3 = feat.extract(record.seq)
-    if cds_seq is None:
-        cds_seq = record.seq
-        cds_loc = record.features[0].location if record.features else None
-    if cds_loc is not None:
-        start = int(cds_loc.start)
-        end = int(cds_loc.end)
-        if not utr5:
-            utr5 = record.seq[:start]
-        if not utr3:
-            utr3 = record.seq[end:]
-    return utr5, cds_seq, utr3
+        if feat.type == "CDS":
+            cds_list.append(feat.extract(record.seq))
+    if not cds_list:
+        cds_list.append(record.seq)
+    return cds_list
 
 
 def _run_mafft(records):
@@ -198,35 +182,43 @@ def _align_translate_back(cds_records):
     return aligned_nt
 
 
-def partition_and_align(fasta_file, ids, api_key):
-    """Partition sequences into UTRs and CDS and align each part."""
+def align_cds(fasta_file, ids, api_key):
+    """Retrieve all CDS regions, align each and concatenate the results."""
     records = list(SeqIO.parse(fasta_file, "fasta"))
     order = [rec.id for rec in records]
-    partitions = {}
+
+    cds_parts = {}
     for chunk in [ids[i:i + 50] for i in range(0, len(ids), 50)]:
         handle = Entrez.efetch(
             db="nuccore", id=",".join(chunk), rettype="gb", retmode="text", api_key=api_key
         )
         for record in SeqIO.parse(handle, "genbank"):
-            utr5, cds, utr3 = _parse_partitions(record)
-            partitions[record.id] = {"utr5": utr5, "cds": cds, "utr3": utr3}
+            cds_parts[record.id] = _extract_cds_features(record)
         handle.close()
-    utr5_recs = [SeqRecord(partitions[i]["utr5"], id=i) for i in order]
-    cds_recs = [SeqRecord(partitions[i]["cds"], id=i) for i in order]
-    utr3_recs = [SeqRecord(partitions[i]["utr3"], id=i) for i in order]
 
-    aligned_utr5 = {r.id: r for r in _run_mafft(utr5_recs)}
-    aligned_cds = _align_translate_back(cds_recs)
-    aligned_utr3 = {r.id: r for r in _run_mafft(utr3_recs)}
+    max_parts = max(len(v) for v in cds_parts.values()) if cds_parts else 0
+    aligned_by_part = {seq_id: [] for seq_id in order}
+
+    for idx in range(max_parts):
+        cds_recs = [
+            SeqRecord(cds_parts[sid][idx], id=sid)
+            for sid in order
+            if idx < len(cds_parts.get(sid, []))
+        ]
+        if not cds_recs:
+            continue
+        aligned = _align_translate_back(cds_recs)
+        part_len = len(next(iter(aligned.values())).seq)
+        for sid in order:
+            if sid in aligned:
+                aligned_by_part[sid].append(aligned[sid].seq)
+            else:
+                aligned_by_part[sid].append(Seq("-" * part_len))
 
     final_records = []
-    for i in order:
-        seq = (
-            aligned_utr5.get(i, SeqRecord(Seq(""))).seq
-            + aligned_cds.get(i, SeqRecord(Seq(""))).seq
-            + aligned_utr3.get(i, SeqRecord(Seq(""))).seq
-        )
-        final_records.append(SeqRecord(seq, id=i))
+    for sid in order:
+        seq = Seq("".join(str(s) for s in aligned_by_part[sid]))
+        final_records.append(SeqRecord(seq, id=sid))
 
     output = io.StringIO()
     SeqIO.write(final_records, output, "fasta")
@@ -300,13 +292,13 @@ def main():
             zf.write(str(fpath), arcname=os.path.basename(str(fpath)))
     print(f"All outputs archived to {zip_file}")
 
-    choice = input("Partition and align sequences? [y/N]: ").strip().lower()
+    choice = input("Align CDS sequences only? [y/N]: ").strip().lower()
     if choice == "y":
-        aligned = partition_and_align(fasta_file, ids, api_key)
-        align_file = output_dir / f"{base}_partitioned_alignment.fasta"
+        aligned = align_cds(fasta_file, ids, api_key)
+        align_file = output_dir / f"{base}_cds_alignment.fasta"
         with open(align_file, "w") as af:
             af.write(aligned)
-        print(f"Partitioned alignment written to {align_file}")
+        print(f"CDS alignment written to {align_file}")
 
 if __name__ == "__main__":
     main()
