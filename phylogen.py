@@ -3,7 +3,6 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 import io
 import os
-import zipfile
 import tempfile
 import subprocess
 import shutil
@@ -270,27 +269,21 @@ def main():
     seq_feat_file = output_dir / f"{base}_sequences_features.txt"
     with open(seq_feat_file, "w") as f:
         f.write(features_data)
-    output_files = [fasta_file, seq_feat_file]
+    print(f"Sequence features written to {seq_feat_file}")
 
     ref_id, ref_fasta, features = fetch_refseq(taxon, api_key)
     if ref_id:
         ref_file = output_dir / f"{base}_refseq.fasta"
         with open(ref_file, "w") as f:
             f.write(ref_fasta)
-        feat_file = output_dir / f"{base}_features.txt"
+        feat_file = output_dir / f"{base}_refseq_features.txt"
         with open(feat_file, "w") as f:
             f.write(features)
-        output_files.extend([ref_file, feat_file])
         print(f"RefSeq written to {ref_file}")
-        print(f"Features written to {feat_file}")
+        print(f"RefSeq features written to {feat_file}")
     else:
         print("No refseq found for this taxon")
 
-    zip_file = output_dir / f"{base}_outputs.zip"
-    with zipfile.ZipFile(zip_file, "w") as zf:
-        for fpath in output_files:
-            zf.write(str(fpath), arcname=os.path.basename(str(fpath)))
-    print(f"All outputs archived to {zip_file}")
 
     choice = input("Align CDS sequences only? [y/N]: ").strip().lower()
     if choice == "y":
