@@ -124,13 +124,15 @@ def fetch_refseq(taxon, api_key):
 
 
 def _extract_cds_features(record):
-    """Return all CDS sequences from a GenBank record."""
+    """Return CDS sequences and their codon_start values from a GenBank record."""
     cds_list = []
     for feat in record.features:
         if feat.type == "CDS":
-            cds_list.append(feat.extract(record.seq))
+            seq = feat.extract(record.seq)
+            codon_start = int(feat.qualifiers.get("codon_start", ["1"])[0])
+            cds_list.append((seq, codon_start))
     if not cds_list:
-        cds_list.append(record.seq)
+        cds_list.append((record.seq, 1))
     return cds_list
 
 
@@ -159,6 +161,9 @@ def _align_translate_back(cds_records):
     codons = {}
     for rec in cds_records:
         seq = rec.seq
+        codon_start = int(rec.annotations.get("codon_start", 1))
+        if codon_start > 1:
+            seq = seq[codon_start - 1:]
         if len(seq) % 3:
             pad = 3 - len(seq) % 3
             seq = seq + Seq("N" * pad)
@@ -199,11 +204,17 @@ def align_cds(fasta_file, ids, api_key):
     aligned_by_part = {seq_id: [] for seq_id in order}
 
     for idx in range(max_parts):
-        cds_recs = [
-            SeqRecord(cds_parts[sid][idx], id=sid)
-            for sid in order
-            if idx < len(cds_parts.get(sid, []))
-        ]
+        cds_recs = []
+        for sid in order:
+            if idx < len(cds_parts.get(sid, [])):
+                seq, codon_start = cds_parts[sid][idx]
+                cds_recs.append(
+                    SeqRecord(
+                        seq,
+                        id=sid,
+                        annotations={"codon_start": codon_start},
+                    )
+                )
         if not cds_recs:
             continue
         aligned = _align_translate_back(cds_recs)
