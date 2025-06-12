@@ -31,6 +31,8 @@ It produces several files:
 - `<Taxon_Name>_refseq.fasta` – the RefSeq sequence for the taxon (if available).
 - `<Taxon_Name>_refseq_features.txt` – list of features (UTRs, CDS, mat_peptides, etc.) from the RefSeq record.
 
-Optionally, the script can align all coding sequences (CDSs) using MAFFT. If selected,
-an additional file `<Taxon_Name>_cds_alignment.fasta` containing the translated,
-aligned and back-translated CDSs will be produced.
+Optionally, the script can align all coding sequences (CDSs). Each CDS is aligned
+individually with the corresponding RefSeq protein placed at the top of the
+alignment. The resulting file `<Taxon_Name>_cds_alignment.fasta` contains the
+nucleotide alignments for every CDS with gaps added when a sequence lacks a
+particular CDS.
