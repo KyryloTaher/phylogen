@@ -10,11 +10,29 @@ from datetime import datetime
 from pathlib import Path
 
 def fetch_ids(taxon, api_key):
+    """Return accession.version identifiers for the given taxon."""
+
     search_term = f"\"{taxon}\"[Organism]"
-    handle = Entrez.esearch(db="nuccore", term=search_term, retmax=10000, api_key=api_key)
+    handle = Entrez.esearch(
+        db="nuccore", term=search_term, retmax=10000, api_key=api_key
+    )
     record = Entrez.read(handle)
     handle.close()
-    return record.get("IdList", [])
+    uid_list = record.get("IdList", [])
+    if not uid_list:
+        return []
+
+    accessions = []
+    for chunk in [uid_list[i:i + 200] for i in range(0, len(uid_list), 200)]:
+        handle = Entrez.esummary(db="nuccore", id=",".join(chunk), api_key=api_key)
+        summaries = Entrez.read(handle)
+        handle.close()
+        for summary in summaries:
+            acc = summary.get("AccessionVersion") or summary.get("Caption")
+            if acc:
+                accessions.append(acc)
+
+    return accessions
 
 def fetch_metadata(ids, api_key):
     """Return metadata for each accession in *ids*.
