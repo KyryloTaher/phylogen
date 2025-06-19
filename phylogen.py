@@ -158,6 +158,7 @@ def fetch_refseq(taxon, api_key):
                 gene = feat.qualifiers.get("gene", [""])[0]
                 product = feat.qualifiers.get("product", [""])[0]
                 label = gene or product or prot_id or f"protein_{len(proteins)+1}"
+                label = label.replace(" ", "_")
                 proteins.append(SeqRecord(prot_seq, id=label))
 
     return refseq_id, fasta, "\n".join(features), proteins
