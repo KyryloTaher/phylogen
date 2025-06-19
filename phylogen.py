@@ -145,28 +145,36 @@ def fetch_refseq(taxon, api_key):
         fasta = f">{record.id}\n{record.seq}\n"
         for feat in record.features:
             features.append(f"{feat.type}: {feat.location}")
-            if feat.type == "CDS":
-                prot_seq = feat.qualifiers.get("translation", [""])[0]
+            if feat.type == "mat_peptide":
+                seq = feat.extract(record.seq)
+                codon_start = int(feat.qualifiers.get("codon_start", ["1"])[0])
+                if codon_start > 1:
+                    seq = seq[codon_start - 1:]
+                if len(seq) % 3:
+                    pad = 3 - len(seq) % 3
+                    seq = seq + Seq("N" * pad)
+                prot_seq = seq.translate(to_stop=False)
                 prot_id = feat.qualifiers.get("protein_id", [""])[0]
                 gene = feat.qualifiers.get("gene", [""])[0]
                 product = feat.qualifiers.get("product", [""])[0]
                 label = gene or product or prot_id or f"protein_{len(proteins)+1}"
-                proteins.append(SeqRecord(Seq(prot_seq), id=label))
+                proteins.append(SeqRecord(prot_seq, id=label))
 
     return refseq_id, fasta, "\n".join(features), proteins
 
 
-def _extract_cds_features(record):
-    """Return CDS sequences and their codon_start values from a GenBank record."""
-    cds_list = []
+def _extract_mat_peptide_features(record):
+    """Return mat_peptide sequences and their codon_start values."""
+
+    pep_list = []
     for feat in record.features:
-        if feat.type == "CDS":
+        if feat.type == "mat_peptide":
             seq = feat.extract(record.seq)
             codon_start = int(feat.qualifiers.get("codon_start", ["1"])[0])
-            cds_list.append((seq, codon_start))
-    if not cds_list:
-        cds_list.append((record.seq, 1))
-    return cds_list
+            pep_list.append((seq, codon_start))
+    if not pep_list:
+        pep_list.append((record.seq, 1))
+    return pep_list
 
 
 def _run_mafft(records):
@@ -189,7 +197,7 @@ def _run_mafft(records):
 
 
 def _align_translate_back(cds_records):
-    """Translate CDS, align amino acids and back-translate to nucleotides."""
+    """Translate mat_peptide regions, align amino acids and back-translate."""
     aa_records = []
     codons = {}
     for rec in cds_records:
@@ -220,7 +228,7 @@ def _align_translate_back(cds_records):
 
 
 def _align_translate_back_with_ref(cds_records, ref_protein=None):
-    """Translate CDSs, include an optional reference protein and align."""
+    """Translate mat_peptide regions, include an optional reference protein and align."""
 
     aa_records = []
     codons = {}
@@ -264,32 +272,32 @@ def _align_translate_back_with_ref(cds_records, ref_protein=None):
     return aligned_nt, ref_aligned
 
 
-def align_cds(fasta_file, ids, api_key, ref_proteins=None):
-    """Retrieve CDS regions, align each separately and include RefSeq proteins."""
+def align_mat_peptides(fasta_file, ids, api_key, ref_proteins=None):
+    """Retrieve mat_peptide regions, align each separately and include RefSeq proteins."""
 
     records = [rec for rec in SeqIO.parse(fasta_file, "fasta") if rec.id in ids]
     order = [rec.id for rec in records]
 
-    cds_parts = {}
+    pep_parts = {}
     for chunk in [ids[i:i + 50] for i in range(0, len(ids), 50)]:
         handle = Entrez.efetch(
             db="nuccore", id=",".join(chunk), rettype="gb", retmode="text", api_key=api_key
         )
         for record in SeqIO.parse(handle, "genbank"):
-            cds_parts[record.id] = _extract_cds_features(record)
+            pep_parts[record.id] = _extract_mat_peptide_features(record)
         handle.close()
 
-    max_parts = max(len(v) for v in cds_parts.values()) if cds_parts else 0
+    max_parts = max(len(v) for v in pep_parts.values()) if pep_parts else 0
     n_parts = max(max_parts, len(ref_proteins) if ref_proteins else 0)
 
     final_records = []
 
     for idx in range(n_parts):
-        cds_recs = []
+        pep_recs = []
         for sid in order:
-            if idx < len(cds_parts.get(sid, [])):
-                seq, codon_start = cds_parts[sid][idx]
-                cds_recs.append(
+            if idx < len(pep_parts.get(sid, [])):
+                seq, codon_start = pep_parts[sid][idx]
+                pep_recs.append(
                     SeqRecord(seq, id=sid, annotations={"codon_start": codon_start})
                 )
 
@@ -297,10 +305,10 @@ def align_cds(fasta_file, ids, api_key, ref_proteins=None):
         if ref_proteins and idx < len(ref_proteins):
             ref_rec = ref_proteins[idx]
 
-        if not cds_recs and ref_rec is None:
+        if not pep_recs and ref_rec is None:
             continue
 
-        aligned, ref_aln = _align_translate_back_with_ref(cds_recs, ref_rec)
+        aligned, ref_aln = _align_translate_back_with_ref(pep_recs, ref_rec)
 
         part_len = None
         if ref_aln is not None:
@@ -314,7 +322,7 @@ def align_cds(fasta_file, ids, api_key, ref_proteins=None):
             )
 
         for sid in order:
-            label = f"{sid}|CDS{idx + 1}"
+            label = f"{sid}|MP{idx + 1}"
             if ref_rec is not None:
                 label = f"{sid}|{ref_rec.id}"
             if sid in aligned:
@@ -389,14 +397,14 @@ def main():
         print("No refseq found for this taxon")
 
 
-    choice = input("Align CDS sequences only? [y/N]: ").strip().lower()
+    choice = input("Align mat_peptide sequences only? [y/N]: ").strip().lower()
     if choice == "y":
         ids_no_ref = [i for i in ids if i != ref_id]
-        aligned = align_cds(fasta_file, ids_no_ref, api_key, ref_proteins)
-        align_file = output_dir / f"{base}_cds_alignment.fasta"
+        aligned = align_mat_peptides(fasta_file, ids_no_ref, api_key, ref_proteins)
+        align_file = output_dir / f"{base}_mat_peptide_alignment.fasta"
         with open(align_file, "w") as af:
             af.write(aligned)
-        print(f"CDS alignment written to {align_file}")
+        print(f"mat_peptide alignment written to {align_file}")
 
 if __name__ == "__main__":
     main()
