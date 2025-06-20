@@ -130,10 +130,10 @@ def fetch_refseq(taxon, api_key):
     if not ids:
         return None, None, None, []
 
-    refseq_id = ids[0]
+    refseq_uid = ids[0]
 
     handle = Entrez.efetch(
-        db="nuccore", id=refseq_id, rettype="gb", retmode="text", api_key=api_key
+        db="nuccore", id=refseq_uid, rettype="gb", retmode="text", api_key=api_key
     )
     gb = handle.read()
     handle.close()
@@ -142,7 +142,10 @@ def fetch_refseq(taxon, api_key):
     features = []
     proteins = []
     pep_positions = []
+    refseq_acc = None
+main
     for record in SeqIO.parse(io.StringIO(gb), "genbank"):
+        refseq_acc = record.id
         fasta = f">{record.id}\n{record.seq}\n"
         for feat in record.features:
             features.append(f"{feat.type}: {feat.location}")
@@ -170,7 +173,9 @@ def fetch_refseq(taxon, api_key):
                     }
                 )
 
+    return refseq_acc, fasta, "\n".join(features), proteins, pep_positions
     return refseq_id, fasta, "\n".join(features), proteins, pep_positions
+main
 
 
 def _extract_mat_peptide_features(record):
@@ -275,6 +280,19 @@ def align_mat_peptides_two_step(
         for rec in SeqIO.parse(fasta_file, "fasta")
         if rec.id in ids or rec.id == ref_id
     }
+    if ref_id not in rec_dict:
+        # fetch reference sequence if not present in fasta_file
+        handle = Entrez.efetch(
+            db="nuccore",
+            id=ref_id,
+            rettype="fasta",
+            retmode="text",
+            api_key=api_key,
+        )
+        rec = SeqIO.read(handle, "fasta")
+        handle.close()
+        rec_dict[ref_id] = rec
+main
     order = [i for i in ids if i != ref_id]
 
     # first alignment of full sequences including refseq
