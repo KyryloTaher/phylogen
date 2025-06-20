@@ -165,16 +165,20 @@ def fetch_refseq(taxon, api_key):
 
 
 def _extract_mat_peptide_features(record):
-    """Return mat_peptide sequences and their codon_start values."""
+    """Return mat_peptide sequences, codon_start values and coordinates."""
 
     pep_list = []
     for feat in record.features:
         if feat.type == "mat_peptide":
             seq = feat.extract(record.seq)
             codon_start = int(feat.qualifiers.get("codon_start", ["1"])[0])
-            pep_list.append((seq, codon_start))
+            start = int(feat.location.nofuzzy_start) + 1
+            end = int(feat.location.nofuzzy_end)
+            coords = f"{start}-{end}"
+            pep_list.append((seq, codon_start, coords))
     if not pep_list:
-        pep_list.append((record.seq, 1))
+        coords = f"1-{len(record.seq)}"
+        pep_list.append((record.seq, 1, coords))
     return pep_list
 
 
@@ -243,10 +247,9 @@ def _align_translate_back_with_ref(cds_records, ref_protein=None):
 
 
 def align_mat_peptides(fasta_file, ids, api_key, ref_proteins=None):
-    """Retrieve mat_peptide regions, align each separately and include RefSeq proteins."""
+    """Align every mat_peptide to each RefSeq mat_peptide individually."""
 
     records = [rec for rec in SeqIO.parse(fasta_file, "fasta") if rec.id in ids]
-    order = [rec.id for rec in records]
 
     pep_parts = {}
     for chunk in [ids[i:i + 50] for i in range(0, len(ids), 50)]:
@@ -257,53 +260,35 @@ def align_mat_peptides(fasta_file, ids, api_key, ref_proteins=None):
             pep_parts[record.id] = _extract_mat_peptide_features(record)
         handle.close()
 
-    max_parts = max(len(v) for v in pep_parts.values()) if pep_parts else 0
-    n_parts = max(max_parts, len(ref_proteins) if ref_proteins else 0)
+    outputs = {}
 
-    final_records = []
+    if not ref_proteins:
+        return outputs
 
-    for idx in range(n_parts):
-        pep_recs = []
-        for sid in order:
-            if idx < len(pep_parts.get(sid, [])):
-                seq, codon_start = pep_parts[sid][idx]
-                pep_recs.append(
-                    SeqRecord(seq, id=sid, annotations={"codon_start": codon_start})
-                )
-
-        ref_rec = None
-        if ref_proteins and idx < len(ref_proteins):
-            ref_rec = ref_proteins[idx]
-
-        if not pep_recs and ref_rec is None:
-            continue
-
-        aligned, ref_aln = _align_translate_back_with_ref(pep_recs, ref_rec)
-
-        part_len = None
-        if ref_aln is not None:
-            part_len = len(ref_aln) * 3
-        elif aligned:
-            part_len = len(next(iter(aligned.values())).seq)
-
-        if ref_aln is not None:
-            final_records.append(
-                SeqRecord(ref_aln, id=f"RefSeq|{ref_rec.id}")
+    all_peptides = []
+    for sid, parts in pep_parts.items():
+        for seq, codon_start, coords in parts:
+            label = f"{sid}/_{coords}"
+            all_peptides.append(
+                SeqRecord(seq, id=label, annotations={"codon_start": codon_start})
             )
 
-        for sid in order:
-            label = f"{sid}|MP{idx + 1}"
-            if ref_rec is not None:
-                label = f"{sid}|{ref_rec.id}"
-            if sid in aligned:
-                final_records.append(SeqRecord(aligned[sid].seq, id=label))
-            else:
-                if part_len is not None:
-                    final_records.append(SeqRecord(Seq("-" * part_len), id=label))
+    for ref_rec in ref_proteins:
+        aligned, ref_aln = _align_translate_back_with_ref(all_peptides, ref_rec)
+        final_records = []
 
-    output = io.StringIO()
-    SeqIO.write(final_records, output, "fasta")
-    return output.getvalue()
+        if ref_aln is not None:
+            final_records.append(SeqRecord(ref_aln, id=f"RefSeq|{ref_rec.id}"))
+
+        for pep in all_peptides:
+            if pep.id in aligned:
+                final_records.append(SeqRecord(aligned[pep.id].seq, id=pep.id))
+
+        output = io.StringIO()
+        SeqIO.write(final_records, output, "fasta")
+        outputs[ref_rec.id] = output.getvalue()
+
+    return outputs
 
 def main():
     print("NCBI Virus Fetcher")
@@ -368,13 +353,15 @@ def main():
 
 
     choice = input("Align mat_peptide sequences only? [y/N]: ").strip().lower()
-    if choice == "y":
+    if choice == "y" and ref_proteins:
         ids_no_ref = [i for i in ids if i != ref_id]
-        aligned = align_mat_peptides(fasta_file, ids_no_ref, api_key, ref_proteins)
-        align_file = output_dir / f"{base}_mat_peptide_alignment.fasta"
-        with open(align_file, "w") as af:
-            af.write(aligned)
-        print(f"mat_peptide alignment written to {align_file}")
+        alignments = align_mat_peptides(fasta_file, ids_no_ref, api_key, ref_proteins)
+        for rname, data in alignments.items():
+            safe_name = rname.replace(" ", "_")
+            align_file = output_dir / f"{base}_{safe_name}_alignment.fasta"
+            with open(align_file, "w") as af:
+                af.write(data)
+            print(f"Alignment for {rname} written to {align_file}")
 
 if __name__ == "__main__":
     main()
