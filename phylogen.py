@@ -120,7 +120,7 @@ def fetch_all_features(ids, api_key):
     return "\n".join(lines)
 
 def fetch_refseq(taxon, api_key):
-    """Return RefSeq record information including proteins."""
+    """Return RefSeq record information including proteins and mat_peptide positions."""
 
     term = f"\"{taxon}\"[Organism] AND srcdb_refseq[PROP]"
     handle = Entrez.esearch(db="nuccore", term=term, retmax=1, api_key=api_key)
@@ -130,10 +130,10 @@ def fetch_refseq(taxon, api_key):
     if not ids:
         return None, None, None, []
 
-    refseq_id = ids[0]
+    refseq_uid = ids[0]
 
     handle = Entrez.efetch(
-        db="nuccore", id=refseq_id, rettype="gb", retmode="text", api_key=api_key
+        db="nuccore", id=refseq_uid, rettype="gb", retmode="text", api_key=api_key
     )
     gb = handle.read()
     handle.close()
@@ -141,7 +141,10 @@ def fetch_refseq(taxon, api_key):
     fasta = None
     features = []
     proteins = []
+    pep_positions = []
+    refseq_acc = None
     for record in SeqIO.parse(io.StringIO(gb), "genbank"):
+        refseq_acc = record.id
         fasta = f">{record.id}\n{record.seq}\n"
         for feat in record.features:
             features.append(f"{feat.type}: {feat.location}")
@@ -160,9 +163,16 @@ def fetch_refseq(taxon, api_key):
                 label = gene or product or prot_id or f"protein_{len(proteins)+1}"
                 label = label.replace(" ", "_")
                 proteins.append(SeqRecord(prot_seq, id=label))
+                pep_positions.append(
+                    {
+                        "label": label,
+                        "start": int(feat.location.start),
+                        "end": int(feat.location.end),
+                        "codon_start": codon_start,
+                    }
+                )
 
-    return refseq_id, fasta, "\n".join(features), proteins
-
+    return refseq_acc, fasta, "\n".join(features), proteins, pep_positions
 
 def _extract_mat_peptide_features(record):
     """Return mat_peptide sequences and their codon_start values."""
@@ -240,6 +250,115 @@ def _align_translate_back_with_ref(cds_records, ref_protein=None):
         aligned_nt[rec.id] = SeqRecord(Seq("".join(nt_frag)), id=rec.id)
 
     return aligned_nt, ref_aligned
+
+
+def _choose_frame_no_stop(seq):
+    """Return codon_start (1-based) for frame without stop codons."""
+    s = str(seq).replace("-", "")
+    for frame in range(3):
+        sub = s[frame:]
+        sub = sub[: len(sub) // 3 * 3]
+        if not sub:
+            return frame + 1
+        aa = Seq(sub).translate(to_stop=False)
+        if "*" not in str(aa):
+            return frame + 1
+    return 1
+
+
+def align_mat_peptides_two_step(
+    fasta_file, ids, api_key, ref_id, ref_pep_positions, ref_proteins=None
+):
+    """Two-step alignment of mat_peptides based on RefSeq coordinates.
+
+    Returns a tuple `(concatenated, per_peptide)` where `concatenated` is a FASTA-formatted string with all peptides joined per accession and `per_peptide` is a list of `(label, fasta_string)` for each individual RefSeq mat_peptide alignment.
+    """
+    rec_dict = {
+        rec.id: rec
+        for rec in SeqIO.parse(fasta_file, "fasta")
+        if rec.id in ids or rec.id == ref_id
+    }
+    if ref_id not in rec_dict:
+        # fetch reference sequence if not present in fasta_file
+        handle = Entrez.efetch(
+            db="nuccore",
+            id=ref_id,
+            rettype="fasta",
+            retmode="text",
+            api_key=api_key,
+        )
+        rec = SeqIO.read(handle, "fasta")
+        handle.close()
+        rec_dict[ref_id] = rec
+    order = [i for i in ids if i != ref_id]
+
+    # first alignment of full sequences including refseq
+    full_aln = _run_mafft([rec_dict[ref_id]] + [rec_dict[i] for i in order])
+    aln_dict = {r.id: r.seq for r in full_aln}
+    ref_aln = aln_dict[ref_id]
+
+    # map reference positions to alignment columns
+    pos_to_col = {}
+    pos = 0
+    for idx, nt in enumerate(str(ref_aln)):
+        if nt != "-":
+            pos_to_col[pos] = idx
+            pos += 1
+
+    concatenated = {sid: [] for sid in order}
+    per_peptide_outputs = []
+
+    for idx, feat in enumerate(ref_pep_positions):
+        start = feat["start"]
+        end = feat["end"]
+        start_col = pos_to_col.get(start)
+        end_col = pos_to_col.get(end - 1)
+        if start_col is None or end_col is None:
+            continue
+        end_col += 1
+
+        pep_records = []
+        for sid in order:
+            sub = aln_dict[sid][start_col:end_col]
+            raw = Seq(str(sub).replace("-", ""))
+            frame = _choose_frame_no_stop(raw)
+            pep_records.append(
+                SeqRecord(raw, id=sid, annotations={"codon_start": frame})
+            )
+
+        ref_rec = None
+        if ref_proteins and idx < len(ref_proteins):
+            ref_rec = ref_proteins[idx]
+
+        aligned_nt, ref_aln_seq = _align_translate_back_with_ref(pep_records, ref_rec)
+
+        part_len = 0
+        if ref_aln_seq is not None:
+            part_len = len(ref_aln_seq) * 3
+        elif aligned_nt:
+            part_len = len(next(iter(aligned_nt.values())).seq)
+
+        per_records = []
+        if ref_aln_seq is not None:
+            per_records.append(SeqRecord(ref_aln_seq, id=f"RefSeq|{ref_rec.id}"))
+        for sid in order:
+            if sid in aligned_nt:
+                seq_str = str(aligned_nt[sid].seq)
+                concatenated[sid].append(seq_str)
+                per_records.append(SeqRecord(aligned_nt[sid].seq, id=sid))
+            else:
+                gap = "-" * part_len
+                concatenated[sid].append(gap)
+                per_records.append(SeqRecord(Seq(gap), id=sid))
+        out = io.StringIO()
+        SeqIO.write(per_records, out, "fasta")
+        per_peptide_outputs.append((feat["label"], out.getvalue()))
+
+    final_records = [SeqRecord(Seq("".join(v)), id=k) for k, v in concatenated.items()]
+
+    output = io.StringIO()
+    SeqIO.write(final_records, output, "fasta")
+    return output.getvalue(), per_peptide_outputs
 
 
 def align_mat_peptides(fasta_file, ids, api_key, ref_proteins=None):
@@ -353,7 +472,7 @@ def main():
         f.write(features_data)
     print(f"Sequence features written to {seq_feat_file}")
 
-    ref_id, ref_fasta, features, ref_proteins = fetch_refseq(taxon, api_key)
+    ref_id, ref_fasta, features, ref_proteins, pep_positions = fetch_refseq(taxon, api_key)
     if ref_id:
         ref_file = output_dir / f"{base}_refseq.fasta"
         with open(ref_file, "w") as f:
@@ -370,11 +489,25 @@ def main():
     choice = input("Align mat_peptide sequences only? [y/N]: ").strip().lower()
     if choice == "y":
         ids_no_ref = [i for i in ids if i != ref_id]
-        aligned = align_mat_peptides(fasta_file, ids_no_ref, api_key, ref_proteins)
+        aligned, per_pep = align_mat_peptides_two_step(
+            fasta_file,
+            ids_no_ref,
+            api_key,
+            ref_id,
+            pep_positions,
+            ref_proteins,
+        )
         align_file = output_dir / f"{base}_mat_peptide_alignment.fasta"
         with open(align_file, "w") as af:
             af.write(aligned)
         print(f"mat_peptide alignment written to {align_file}")
+
+        for label, aln in per_pep:
+            fname = label.replace("|", "_")
+            part_file = output_dir / f"{base}_{fname}_alignment.fasta"
+            with open(part_file, "w") as pf:
+                pf.write(aln)
+            print(f"mat_peptide {label} alignment written to {part_file}")
 
 if __name__ == "__main__":
     main()
