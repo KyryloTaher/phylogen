@@ -143,7 +143,6 @@ def fetch_refseq(taxon, api_key):
     proteins = []
     pep_positions = []
     refseq_acc = None
-main
     for record in SeqIO.parse(io.StringIO(gb), "genbank"):
         refseq_acc = record.id
         fasta = f">{record.id}\n{record.seq}\n"
@@ -174,9 +173,6 @@ main
                 )
 
     return refseq_acc, fasta, "\n".join(features), proteins, pep_positions
-    return refseq_id, fasta, "\n".join(features), proteins, pep_positions
-main
-
 
 def _extract_mat_peptide_features(record):
     """Return mat_peptide sequences and their codon_start values."""
@@ -292,7 +288,6 @@ def align_mat_peptides_two_step(
         rec = SeqIO.read(handle, "fasta")
         handle.close()
         rec_dict[ref_id] = rec
-main
     order = [i for i in ids if i != ref_id]
 
     # first alignment of full sequences including refseq
