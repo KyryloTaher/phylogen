@@ -38,3 +38,5 @@ Each peptide is aligned individually with the corresponding RefSeq protein place
 at the top of the alignment. The resulting file `<Taxon_Name>_mat_peptide_alignment.fasta`
 contains the nucleotide alignments for every peptide with gaps added when a sequence
 lacks a particular peptide.
+Additionally, separate alignment files `<Taxon_Name>_<Peptide_Label>_alignment.fasta`
+are produced for each RefSeq mat-peptide.

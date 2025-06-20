@@ -269,6 +269,10 @@ def _choose_frame_no_stop(seq):
 def align_mat_peptides_two_step(
     fasta_file, ids, api_key, ref_id, ref_pep_positions, ref_proteins=None
 ):
+    """Two-step alignment of mat_peptides based on RefSeq coordinates.
+
+    Returns a tuple `(concatenated, per_peptide)` where `concatenated` is a FASTA-formatted string with all peptides joined per accession and `per_peptide` is a list of `(label, fasta_string)` for each individual RefSeq mat_peptide alignment.
+    """
     """Two-step alignment of mat_peptides based on RefSeq coordinates."""
 
     rec_dict = {
@@ -304,6 +308,8 @@ def align_mat_peptides_two_step(
             pos += 1
 
     concatenated = {sid: [] for sid in order}
+    per_peptide_outputs = []
+
 
     for idx, feat in enumerate(ref_pep_positions):
         start = feat["start"]
@@ -335,6 +341,21 @@ def align_mat_peptides_two_step(
         elif aligned_nt:
             part_len = len(next(iter(aligned_nt.values())).seq)
 
+        per_records = []
+        if ref_aln_seq is not None:
+            per_records.append(SeqRecord(ref_aln_seq, id=f"RefSeq|{ref_rec.id}"))
+        for sid in order:
+            if sid in aligned_nt:
+                seq_str = str(aligned_nt[sid].seq)
+                concatenated[sid].append(seq_str)
+                per_records.append(SeqRecord(aligned_nt[sid].seq, id=sid))
+            else:
+                gap = "-" * part_len
+                concatenated[sid].append(gap)
+                per_records.append(SeqRecord(Seq(gap), id=sid))
+        out = io.StringIO()
+        SeqIO.write(per_records, out, "fasta")
+        per_peptide_outputs.append((feat["label"], out.getvalue()))
         for sid in order:
             if sid in aligned_nt:
                 concatenated[sid].append(str(aligned_nt[sid].seq))
@@ -345,8 +366,8 @@ def align_mat_peptides_two_step(
 
     output = io.StringIO()
     SeqIO.write(final_records, output, "fasta")
+    return output.getvalue(), per_peptide_outputs
     return output.getvalue()
-
 
 def align_mat_peptides(fasta_file, ids, api_key, ref_proteins=None):
     """Retrieve mat_peptide regions, align each separately and include RefSeq proteins."""
@@ -476,7 +497,7 @@ def main():
     choice = input("Align mat_peptide sequences only? [y/N]: ").strip().lower()
     if choice == "y":
         ids_no_ref = [i for i in ids if i != ref_id]
-        aligned = align_mat_peptides_two_step(
+        aligned, per_pep = align_mat_peptides_two_step(
             fasta_file,
             ids_no_ref,
             api_key,
@@ -488,6 +509,13 @@ def main():
         with open(align_file, "w") as af:
             af.write(aligned)
         print(f"mat_peptide alignment written to {align_file}")
+
+        for label, aln in per_pep:
+            fname = label.replace("|", "_")
+            part_file = output_dir / f"{base}_{fname}_alignment.fasta"
+            with open(part_file, "w") as pf:
+                pf.write(aln)
+            print(f"mat_peptide {label} alignment written to {part_file}")
 
 if __name__ == "__main__":
     main()
