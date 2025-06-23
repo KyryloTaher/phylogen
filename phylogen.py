@@ -277,6 +277,59 @@ def _choose_frame_no_stop(seq):
     return 1
 
 
+def _compute_identity_map(aln_str):
+    """Return mapping of sequence ID to identity with the reference.
+
+    The identity is calculated using only the region from the first to last
+    non-gap nucleotide in each sequence. Gaps are ignored in the calculation.
+    """
+    recs = list(SeqIO.parse(io.StringIO(aln_str), "fasta"))
+    ref = None
+    for r in recs:
+        if r.id.startswith("RefSeq|"):
+            ref = r
+            break
+    if ref is None:
+        return {}
+
+    ref_seq = str(ref.seq)
+    result = {}
+    for rec in recs:
+        if rec.id == ref.id:
+            continue
+        seq = str(rec.seq)
+        try:
+            first = next(i for i, c in enumerate(seq) if c != "-")
+            last = len(seq) - 1 - next(i for i, c in enumerate(reversed(seq)) if c != "-")
+        except StopIteration:
+            result[rec.id] = 0.0
+            continue
+
+        sub = seq[first : last + 1]
+        ref_sub = ref_seq[first : last + 1]
+        matches = 0
+        valid = 0
+        for a, b in zip(sub, ref_sub):
+            if a != "-" and b != "-":
+                valid += 1
+                if a == b:
+                    matches += 1
+        result[rec.id] = matches / valid if valid else 0.0
+    return result
+
+
+def _filter_alignment(aln_str, keep_ids):
+    """Return FASTA alignment string with only the specified IDs kept."""
+    recs = [
+        r
+        for r in SeqIO.parse(io.StringIO(aln_str), "fasta")
+        if r.id.startswith("RefSeq|") or r.id in keep_ids
+    ]
+    out = io.StringIO()
+    SeqIO.write(recs, out, "fasta")
+    return out.getvalue()
+
+
 def align_mat_peptides_two_step(
     fasta_file, ids, api_key, ref_id, ref_pep_positions, ref_proteins=None
 ):
@@ -547,12 +600,21 @@ def main():
             af.write(aligned)
         print(f"mat_peptide alignment written to {align_file}")
 
+        identity_map = _compute_identity_map(aligned)
+        id_pass = {sid for sid, val in identity_map.items() if val >= 0.5}
+        if id_pass:
+            id_file = output_dir / f"{base}_mat_peptide_alignment_id50.fasta"
+            with open(id_file, "w") as af:
+                af.write(_filter_alignment(aligned, id_pass))
+            print(f"mat_peptide alignment (>=50% identity) written to {id_file}")
+
         if filter_opt == "complete":
-            comp_ids = [sid for sid, vals in completeness.items() if all(vals.get(l, False) for l in vals)]
+            comp_ids = {sid for sid, vals in completeness.items() if all(vals.get(l, False) for l in vals)}
+            keep_ids = comp_ids & id_pass if id_pass else comp_ids
             filt_records = [
                 rec
                 for rec in SeqIO.parse(io.StringIO(aligned), "fasta")
-                if rec.id in comp_ids or rec.id.startswith("RefSeq|")
+                if rec.id in keep_ids or rec.id.startswith("RefSeq|")
             ]
             out = io.StringIO()
             SeqIO.write(filt_records, out, "fasta")
@@ -568,11 +630,19 @@ def main():
                 pf.write(aln)
             print(f"mat_peptide {label} alignment written to {part_file}")
 
+            if id_pass:
+                part_file_i = output_dir / f"{base}_{fname}_alignment_id50.fasta"
+                with open(part_file_i, "w") as pfi:
+                    pfi.write(_filter_alignment(aln, id_pass))
+                print(f"mat_peptide {label} >=50% identity alignment written to {part_file_i}")
+
             if filter_opt == "complete":
+                keep_ids = comp_ids & id_pass if id_pass else comp_ids
                 filt_records = [
                     rec
                     for rec in SeqIO.parse(io.StringIO(aln), "fasta")
-                    if rec.id.startswith("RefSeq|") or completeness.get(rec.id, {}).get(label, False)
+                    if rec.id.startswith("RefSeq|")
+                    or (rec.id in keep_ids and completeness.get(rec.id, {}).get(label, False))
                 ]
                 out = io.StringIO()
                 SeqIO.write(filt_records, out, "fasta")
