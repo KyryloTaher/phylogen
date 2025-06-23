@@ -30,12 +30,12 @@ It produces several files:
   for the taxon.
 - `<Taxon_Name>_refseq.fasta` – the RefSeq sequence for the taxon (if available).
 - `<Taxon_Name>_refseq_features.txt` – list of features (UTRs, CDS, mat_peptides, etc.) from the RefSeq record.
-- RefSeq protein labels have spaces replaced with underscores so MAFFT does not
+- RefSeq peptide labels have spaces replaced with underscores so MAFFT does not
   truncate them during alignment.
 
 Optionally, the script can align all mature peptide regions (`mat_peptide` features).
-Each peptide is aligned individually with the corresponding RefSeq protein placed
-at the top of the alignment. The resulting file `<Taxon_Name>_mat_peptide_alignment.fasta`
+Each peptide is aligned individually with the corresponding RefSeq nucleotide segment
+placed at the top of the alignment. The resulting file `<Taxon_Name>_mat_peptide_alignment.fasta`
 contains the nucleotide alignments for every peptide with gaps added when a sequence
 lacks a particular peptide.
 Additionally, separate alignment files `<Taxon_Name>_<Peptide_Label>_alignment.fasta`
