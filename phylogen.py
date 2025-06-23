@@ -631,6 +631,19 @@ def main():
             print(
                 f"Complete mat_peptide alignment written to {comp_file}"
             )
+        if filter_opt == "complete":
+            comp_ids = [sid for sid, vals in completeness.items() if all(vals.get(l, False) for l in vals)]
+            filt_records = [
+                rec
+                for rec in SeqIO.parse(io.StringIO(aligned), "fasta")
+                if rec.id in comp_ids or rec.id.startswith("RefSeq|")
+            ]
+            out = io.StringIO()
+            SeqIO.write(filt_records, out, "fasta")
+            comp_file = output_dir / f"{base}_mat_peptide_alignment_complete.fasta"
+            with open(comp_file, "w") as cf:
+                cf.write(out.getvalue())
+            print(f"Complete mat_peptide alignment written to {comp_file}")
 
         for label, aln in per_pep:
             fname = label.replace("|", "_")
@@ -645,6 +658,18 @@ def main():
                     pfi.write(_filter_alignment(aln, id_pass))
                 print(f"mat_peptide {label} >=50% identity alignment written to {part_file_i}")
 
+            if filter_opt == "complete":
+                filt_records = [
+                    rec
+                    for rec in SeqIO.parse(io.StringIO(aln), "fasta")
+                    if rec.id.startswith("RefSeq|") or completeness.get(rec.id, {}).get(label, False)
+                ]
+                out = io.StringIO()
+                SeqIO.write(filt_records, out, "fasta")
+                part_file_c = output_dir / f"{base}_{fname}_alignment_complete.fasta"
+                with open(part_file_c, "w") as pf2:
+                    pf2.write(out.getvalue())
+                print(f"mat_peptide {label} complete-only alignment written to {part_file_c}")
 
 if __name__ == "__main__":
     main()
