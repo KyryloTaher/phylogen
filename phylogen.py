@@ -282,7 +282,12 @@ def align_mat_peptides_two_step(
 ):
     """Two-step alignment of mat_peptides based on RefSeq coordinates.
 
-    Returns a tuple `(concatenated, per_peptide)` where `concatenated` is a FASTA-formatted string with all peptides joined per accession and `per_peptide` is a list of `(label, fasta_string)` for each individual RefSeq mat_peptide alignment.
+    Returns a tuple `(concatenated, per_peptide, completeness)` where
+    `concatenated` is a FASTA-formatted string with all peptides joined per
+    accession, `per_peptide` is a list of `(label, fasta_string)` for each
+    individual RefSeq mat_peptide alignment and `completeness` is a mapping of
+    accession -> peptide label -> boolean indicating whether the first and last
+    reference amino acids are present.
     """
     """Two-step alignment of mat_peptides based on RefSeq coordinates."""
 
@@ -320,6 +325,8 @@ def align_mat_peptides_two_step(
 
     concatenated = {sid: [] for sid in order}
     per_peptide_outputs = []
+    completeness = {sid: {} for sid in order}
+    labels = []
 
 
     for idx, feat in enumerate(ref_pep_positions):
@@ -352,32 +359,51 @@ def align_mat_peptides_two_step(
         elif aligned_nt:
             part_len = len(next(iter(aligned_nt.values())).seq)
 
+        # Determine first and last reference codon positions
+        first_idx = last_idx = None
+        if ref_aln_seq is not None:
+            codons = [str(ref_aln_seq.seq)[i:i+3] for i in range(0, len(ref_aln_seq.seq), 3)]
+            for i, c in enumerate(codons):
+                if c != '---':
+                    first_idx = i
+                    break
+            for i, c in enumerate(reversed(codons)):
+                if c != '---':
+                    last_idx = len(codons) - 1 - i
+                    break
+
+
         per_records = []
         if ref_aln_seq is not None:
             per_records.append(SeqRecord(ref_aln_seq.seq, id=f"RefSeq|{ref_rec.id}"))
+        label = feat["label"]
+        labels.append(label)
         for sid in order:
             if sid in aligned_nt:
                 seq_str = str(aligned_nt[sid].seq)
-                concatenated[sid].append(seq_str)
-                per_records.append(SeqRecord(aligned_nt[sid].seq, id=sid))
             else:
-                gap = "-" * part_len
-                concatenated[sid].append(gap)
-                per_records.append(SeqRecord(Seq(gap), id=sid))
+                seq_str = "-" * part_len
+            codons = [seq_str[i:i+3] for i in range(0, len(seq_str), 3)]
+            comp = False
+            if first_idx is not None and last_idx is not None and len(codons) > last_idx:
+                comp = codons[first_idx] != '---' and codons[last_idx] != '---'
+            completeness[sid][label] = comp
+            concatenated[sid].append(seq_str)
+            per_records.append(SeqRecord(Seq(seq_str), id=sid, description="complete" if comp else "partial"))
         out = io.StringIO()
         SeqIO.write(per_records, out, "fasta")
-        per_peptide_outputs.append((feat["label"], out.getvalue()))
-        for sid in order:
-            if sid in aligned_nt:
-                concatenated[sid].append(str(aligned_nt[sid].seq))
-            else:
-                concatenated[sid].append("-" * part_len)
+        per_peptide_outputs.append((label, out.getvalue()))
 
-    final_records = [SeqRecord(Seq("".join(v)), id=k) for k, v in concatenated.items()]
+    final_records = []
+    for sid, parts in concatenated.items():
+        overall = all(completeness[sid].get(lbl, False) for lbl in labels)
+        final_records.append(
+            SeqRecord(Seq("".join(parts)), id=sid, description="complete" if overall else "partial")
+        )
 
     output = io.StringIO()
     SeqIO.write(final_records, output, "fasta")
-    return output.getvalue(), per_peptide_outputs
+    return output.getvalue(), per_peptide_outputs, completeness
 
 def align_mat_peptides(fasta_file, ids, api_key, ref_proteins=None):
     """Retrieve mat_peptide regions, align each separately and include RefSeq proteins."""
@@ -506,8 +532,9 @@ def main():
 
     choice = input("Align mat_peptide sequences only? [y/N]: ").strip().lower()
     if choice == "y":
+        filter_opt = input("Filter by completeness? [all/complete]: ").strip().lower() or "all"
         ids_no_ref = [i for i in ids if i != ref_id]
-        aligned, per_pep = align_mat_peptides_two_step(
+        aligned, per_pep, completeness = align_mat_peptides_two_step(
             fasta_file,
             ids_no_ref,
             api_key,
@@ -520,12 +547,39 @@ def main():
             af.write(aligned)
         print(f"mat_peptide alignment written to {align_file}")
 
+        if filter_opt == "complete":
+            comp_ids = [sid for sid, vals in completeness.items() if all(vals.get(l, False) for l in vals)]
+            filt_records = [
+                rec
+                for rec in SeqIO.parse(io.StringIO(aligned), "fasta")
+                if rec.id in comp_ids or rec.id.startswith("RefSeq|")
+            ]
+            out = io.StringIO()
+            SeqIO.write(filt_records, out, "fasta")
+            comp_file = output_dir / f"{base}_mat_peptide_alignment_complete.fasta"
+            with open(comp_file, "w") as cf:
+                cf.write(out.getvalue())
+            print(f"Complete mat_peptide alignment written to {comp_file}")
+
         for label, aln in per_pep:
             fname = label.replace("|", "_")
             part_file = output_dir / f"{base}_{fname}_alignment.fasta"
             with open(part_file, "w") as pf:
                 pf.write(aln)
             print(f"mat_peptide {label} alignment written to {part_file}")
+
+            if filter_opt == "complete":
+                filt_records = [
+                    rec
+                    for rec in SeqIO.parse(io.StringIO(aln), "fasta")
+                    if rec.id.startswith("RefSeq|") or completeness.get(rec.id, {}).get(label, False)
+                ]
+                out = io.StringIO()
+                SeqIO.write(filt_records, out, "fasta")
+                part_file_c = output_dir / f"{base}_{fname}_alignment_complete.fasta"
+                with open(part_file_c, "w") as pf2:
+                    pf2.write(out.getvalue())
+                print(f"mat_peptide {label} complete-only alignment written to {part_file_c}")
 
 if __name__ == "__main__":
     main()
