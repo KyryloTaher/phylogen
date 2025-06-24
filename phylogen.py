@@ -9,10 +9,15 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-def fetch_ids(taxon, api_key):
-    """Return accession.version identifiers for the given taxon."""
+def fetch_ids(taxon, api_key, refseq_only=False):
+    """Return accession.version identifiers for the given taxon.
+
+    If *refseq_only* is True, restrict the search to RefSeq records.
+    """
 
     search_term = f"\"{taxon}\"[Organism]"
+    if refseq_only:
+        search_term += " AND srcdb_refseq[PROP]"
     handle = Entrez.esearch(
         db="nuccore", term=search_term, retmax=10000, api_key=api_key
     )
@@ -189,6 +194,30 @@ def _extract_mat_peptide_features(record):
     return pep_list
 
 
+def _extract_labeled_mat_peptides(record):
+    """Return mapping of label -> SeqRecord for mat_peptides."""
+
+    result = {}
+    for feat in record.features:
+        if feat.type == "mat_peptide":
+            seq = feat.extract(record.seq)
+            codon_start = int(feat.qualifiers.get("codon_start", ["1"])[0])
+            if codon_start > 1:
+                seq = seq[codon_start - 1:]
+            if len(seq) % 3:
+                pad = 3 - len(seq) % 3
+                seq = seq + Seq("N" * pad)
+            prot_id = feat.qualifiers.get("protein_id", [""])[0]
+            gene = feat.qualifiers.get("gene", [""])[0]
+            product = feat.qualifiers.get("product", [""])[0]
+            label = gene or product or prot_id or f"protein_{len(result)+1}"
+            label = label.replace(" ", "_")
+            result[label] = SeqRecord(seq, id=label, annotations={"codon_start": codon_start})
+    if not result:
+        result["genome"] = SeqRecord(record.seq, id="genome", annotations={"codon_start": 1})
+    return result
+
+
 def _run_mafft(records):
     """Align a list of SeqRecord objects with MAFFT L-INS-i."""
     if not records:
@@ -328,6 +357,100 @@ def _filter_alignment(aln_str, keep_ids):
     out = io.StringIO()
     SeqIO.write(recs, out, "fasta")
     return out.getvalue()
+
+
+def _prompt_label_groups(labels):
+    """Return mapping of label -> canonical label using user input.
+
+    The user is first shown all distinct labels and then asked to provide a
+    canonical name for each one. Pressing enter keeps the original label.
+    """
+
+    print("Mat_peptide labels detected:")
+    for lab in sorted(labels):
+        print(f" - {lab}")
+
+    canonical = {}
+    order = []
+    for label in sorted(labels):
+        ans = input(f"Canonical name for '{label}' (leave empty to keep): ").strip()
+        if not ans:
+            ans = label
+        canonical[label] = ans
+        if ans not in order:
+            order.append(ans)
+    return canonical, order
+
+
+def align_mat_peptides_by_name(ids, api_key):
+    """Align mat_peptides by their feature names across multiple sequences.
+
+    The user will be asked to provide canonical names for each distinct
+    mat_peptide label encountered so that peptides with synonymous names can be
+    aligned together.
+    """
+
+    pep_map = {}
+    all_labels = set()
+    for chunk in [ids[i:i + 50] for i in range(0, len(ids), 50)]:
+        handle = Entrez.efetch(
+            db="nuccore", id=",".join(chunk), rettype="gb", retmode="text", api_key=api_key
+        )
+        for record in SeqIO.parse(handle, "genbank"):
+            labeled = _extract_labeled_mat_peptides(record)
+            pep_map[record.id] = labeled
+            all_labels.update(labeled.keys())
+        handle.close()
+
+    canonical, order = _prompt_label_groups(all_labels)
+
+    concatenated = {sid: [] for sid in ids}
+    completeness = {sid: {} for sid in ids}
+    per_outputs = []
+
+    for label in order:
+        pep_recs = []
+        for sid in ids:
+            rec_map = pep_map.get(sid, {})
+            found = None
+            for lab, rec in rec_map.items():
+                if canonical[lab] == label:
+                    found = rec
+                    break
+            if found is not None:
+                pep_recs.append(SeqRecord(found.seq, id=sid, annotations=found.annotations))
+
+        aligned, _ = _align_translate_back_with_ref(pep_recs)
+
+        part_len = len(next(iter(aligned.values())).seq) if aligned else 0
+
+        per_records = []
+        for sid in ids:
+            if sid in aligned:
+                seq_str = str(aligned[sid].seq)
+            else:
+                seq_str = "-" * part_len
+            codons = [seq_str[i:i+3] for i in range(0, len(seq_str), 3)]
+            comp = False
+            if codons and codons[0] != "---" and codons[-1] != "---":
+                comp = True
+            completeness[sid][label] = comp
+            concatenated[sid].append(seq_str)
+            per_records.append(SeqRecord(Seq(seq_str), id=sid, description="complete" if comp else "partial"))
+        out = io.StringIO()
+        SeqIO.write(per_records, out, "fasta")
+        per_outputs.append((label, out.getvalue()))
+
+    final_records = []
+    for sid, parts in concatenated.items():
+        overall = all(completeness[sid].get(lbl, False) for lbl in order)
+        final_records.append(
+            SeqRecord(Seq("".join(parts)), id=sid, description="complete" if overall else "partial")
+        )
+
+    out = io.StringIO()
+    SeqIO.write(final_records, out, "fasta")
+    return out.getvalue(), per_outputs, completeness
 
 
 def align_mat_peptides_two_step(
@@ -526,6 +649,7 @@ def main():
     api_key = input("NCBI API Key: ").strip()
     taxon = input("Taxon Name [Potyvirus]: ").strip() or "Potyvirus"
     base = taxon.replace(" ", "_")
+    higher = input("Is this genus level or higher? [y/N]: ").strip().lower() == "y"
 
     # Determine output directory within the user's home/projects/phylogen folder
     base_dir = Path.home() / "projects" / "phylogen"
@@ -540,7 +664,7 @@ def main():
     Entrez.email = "example@example.com"
 
     print("Fetching data from NCBI...")
-    ids = fetch_ids(taxon, api_key)
+    ids = fetch_ids(taxon, api_key, refseq_only=higher)
     if not ids:
         print("No sequences found")
         return
@@ -586,27 +710,38 @@ def main():
     choice = input("Align mat_peptide sequences only? [y/N]: ").strip().lower()
     if choice == "y":
         filter_opt = input("Filter by completeness? [all/complete]: ").strip().lower() or "all"
-        ids_no_ref = [i for i in ids if i != ref_id]
-        aligned, per_pep, completeness = align_mat_peptides_two_step(
-            fasta_file,
-            ids_no_ref,
-            api_key,
-            ref_id,
-            pep_positions,
-            ref_proteins,
-        )
+        if higher:
+            aligned, per_pep, completeness = align_mat_peptides_by_name(
+                ids,
+                api_key,
+            )
+        else:
+            ids_no_ref = [i for i in ids if i != ref_id]
+            aligned, per_pep, completeness = align_mat_peptides_two_step(
+                fasta_file,
+                ids_no_ref,
+                api_key,
+                ref_id,
+                pep_positions,
+                ref_proteins,
+            )
         align_file = output_dir / f"{base}_mat_peptide_alignment.fasta"
         with open(align_file, "w") as af:
             af.write(aligned)
         print(f"mat_peptide alignment written to {align_file}")
 
-        identity_map = _compute_identity_map(aligned)
-        id_pass = {sid for sid, val in identity_map.items() if val >= 0.5}
-        if id_pass:
-            id_file = output_dir / f"{base}_mat_peptide_alignment_id50.fasta"
-            with open(id_file, "w") as af:
-                af.write(_filter_alignment(aligned, id_pass))
-            print(f"mat_peptide alignment (>=50% identity) written to {id_file}")
+        if higher:
+            id_pass = set(ids)
+        else:
+            identity_map = _compute_identity_map(aligned)
+            id_pass = {sid for sid, val in identity_map.items() if val >= 0.5}
+            if id_pass:
+                id_file = output_dir / f"{base}_mat_peptide_alignment_id50.fasta"
+                with open(id_file, "w") as af:
+                    af.write(_filter_alignment(aligned, id_pass))
+                print(
+                    f"mat_peptide alignment (>=50% identity) written to {id_file}"
+                )
 
         if filter_opt == "complete":
             comp_ids = {
@@ -652,11 +787,13 @@ def main():
                 pf.write(aln)
             print(f"mat_peptide {label} alignment written to {part_file}")
 
-            if id_pass:
+            if not higher and id_pass:
                 part_file_i = output_dir / f"{base}_{fname}_alignment_id50.fasta"
                 with open(part_file_i, "w") as pfi:
                     pfi.write(_filter_alignment(aln, id_pass))
-                print(f"mat_peptide {label} >=50% identity alignment written to {part_file_i}")
+                print(
+                    f"mat_peptide {label} >=50% identity alignment written to {part_file_i}"
+                )
 
             if filter_opt == "complete":
                 filt_records = [
