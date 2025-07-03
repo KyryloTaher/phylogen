@@ -389,7 +389,26 @@ def align_mat_peptides_by_name(ids, api_key):
     mat_peptide label encountered so that peptides with synonymous names can be
     aligned together.
     """
+    """Return mapping of label -> canonical label using user input."""
 
+    canonical = {}
+    groups = []
+    for label in sorted(labels):
+        assigned = False
+        for canon in groups:
+            ans = input(f'Does "{label}" mean the same as "{canon}"? [y/N]: ').strip().lower()
+            if ans == "y":
+                canonical[label] = canon
+                assigned = True
+                break
+        if not assigned:
+            canonical[label] = label
+            groups.append(label)
+    return canonical, groups
+
+
+def align_mat_peptides_by_name(ids, api_key):
+    """Align mat_peptides by their feature names across multiple sequences."""
     pep_map = {}
     all_labels = set()
     for chunk in [ids[i:i + 50] for i in range(0, len(ids), 50)]:
