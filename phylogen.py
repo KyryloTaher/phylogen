@@ -360,6 +360,35 @@ def _filter_alignment(aln_str, keep_ids):
 
 
 def _prompt_label_groups(labels):
+    """Return mapping of label -> canonical label using user input.
+
+    The user is first shown all distinct labels and then asked to provide a
+    canonical name for each one. Pressing enter keeps the original label.
+    """
+
+    print("Mat_peptide labels detected:")
+    for lab in sorted(labels):
+        print(f" - {lab}")
+
+    canonical = {}
+    order = []
+    for label in sorted(labels):
+        ans = input(f"Canonical name for '{label}' (leave empty to keep): ").strip()
+        if not ans:
+            ans = label
+        canonical[label] = ans
+        if ans not in order:
+            order.append(ans)
+    return canonical, order
+
+
+def align_mat_peptides_by_name(ids, api_key):
+    """Align mat_peptides by their feature names across multiple sequences.
+
+    The user will be asked to provide canonical names for each distinct
+    mat_peptide label encountered so that peptides with synonymous names can be
+    aligned together.
+    """
     """Return mapping of label -> canonical label using user input."""
 
     canonical = {}
@@ -380,7 +409,6 @@ def _prompt_label_groups(labels):
 
 def align_mat_peptides_by_name(ids, api_key):
     """Align mat_peptides by their feature names across multiple sequences."""
-
     pep_map = {}
     all_labels = set()
     for chunk in [ids[i:i + 50] for i in range(0, len(ids), 50)]:
@@ -721,13 +749,18 @@ def main():
             af.write(aligned)
         print(f"mat_peptide alignment written to {align_file}")
 
-        identity_map = _compute_identity_map(aligned)
-        id_pass = {sid for sid, val in identity_map.items() if val >= 0.5}
-        if id_pass:
-            id_file = output_dir / f"{base}_mat_peptide_alignment_id50.fasta"
-            with open(id_file, "w") as af:
-                af.write(_filter_alignment(aligned, id_pass))
-            print(f"mat_peptide alignment (>=50% identity) written to {id_file}")
+        if higher:
+            id_pass = set(ids)
+        else:
+            identity_map = _compute_identity_map(aligned)
+            id_pass = {sid for sid, val in identity_map.items() if val >= 0.5}
+            if id_pass:
+                id_file = output_dir / f"{base}_mat_peptide_alignment_id50.fasta"
+                with open(id_file, "w") as af:
+                    af.write(_filter_alignment(aligned, id_pass))
+                print(
+                    f"mat_peptide alignment (>=50% identity) written to {id_file}"
+                )
 
         if filter_opt == "complete":
             comp_ids = {
@@ -773,11 +806,13 @@ def main():
                 pf.write(aln)
             print(f"mat_peptide {label} alignment written to {part_file}")
 
-            if id_pass:
+            if not higher and id_pass:
                 part_file_i = output_dir / f"{base}_{fname}_alignment_id50.fasta"
                 with open(part_file_i, "w") as pfi:
                     pfi.write(_filter_alignment(aln, id_pass))
-                print(f"mat_peptide {label} >=50% identity alignment written to {part_file_i}")
+                print(
+                    f"mat_peptide {label} >=50% identity alignment written to {part_file_i}"
+                )
 
             if filter_opt == "complete":
                 filt_records = [
