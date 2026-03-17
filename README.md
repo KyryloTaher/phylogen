@@ -1,42 +1,42 @@
 # Phylogen Virus Fetcher
 
-This repository contains a small command line tool that queries NCBI for virus sequences by taxon name. It uses NCBI's Entrez API to download sequences and metadata as well as a reference sequence with its annotated features.
+This command-line tool queries NCBI for virus sequences by taxon name, enriches sequence headers with metadata, and aligns mature peptide regions (`mat_peptide`) using **MAFFT on a Galaxy server** (default: `https://usegalaxy.org`).
 
 ## Requirements
 
-```
+```bash
 pip install -r requirements.txt
 ```
 
-[MAFFT](https://mafft.cbrc.jp/alignment/software/) executable to be
-installed and available on your `PATH`.
+You need:
+- NCBI API key
+- Galaxy API key (for a Galaxy instance exposing a MAFFT tool)
 
 ## Usage
 
-Run the script:
-
-```
+```bash
 python phylogen.py
 ```
 
-The program will prompt for your NCBI API key and a taxon name (e.g. `Potyvirus`).
-It produces several files:
+The script prompts for:
+- Entrez email
+- NCBI API key
+- Galaxy URL (default `https://usegalaxy.org`)
+- Galaxy API key
+- Taxon name
 
-- `<Taxon_Name>.fasta` – all sequences with isolate, host, country,
-  collection date and release date in the headers. Metadata is gathered from
-  both `esummary` and GenBank records to ensure these fields are populated when
-  available.
-- `<Taxon_Name>_sequences_features.txt` – features for every sequence returned
-  for the taxon.
-- `<Taxon_Name>_refseq.fasta` – the RefSeq sequence for the taxon (if available).
-- `<Taxon_Name>_refseq_features.txt` – list of features (UTRs, CDS, mat_peptides, etc.) from the RefSeq record.
-- RefSeq peptide labels have spaces replaced with underscores so MAFFT does not
-  truncate them during alignment.
+## Outputs
 
-Optionally, the script can align all mature peptide regions (`mat_peptide` features).
-Each peptide is aligned individually with the corresponding RefSeq nucleotide segment
-placed at the top of the alignment. The resulting file `<Taxon_Name>_mat_peptide_alignment.fasta`
-contains the nucleotide alignments for every peptide with gaps added when a sequence
-lacks a particular peptide.
-Additionally, separate alignment files `<Taxon_Name>_<Peptide_Label>_alignment.fasta`
-are produced for each RefSeq mat-peptide.
+The script writes output under:
+
+`~/projects/phylogen/outputs_<timestamp>/`
+
+Main files include:
+- `<Taxon_Name>.fasta` — downloaded NCBI sequences with metadata in headers (`isolate`, `host`, `country`, `collection_date`, `release_date`).
+- `<Taxon_Name>_mat_peptide_alignment.fasta` — concatenated alignment across peptide groups.
+- `<Taxon_Name>_<Peptide_Label>_alignment.fasta` — per-peptide group alignments.
+
+## Notes
+
+- Local MAFFT is no longer used.
+- MAFFT runs are submitted via Galaxy API by creating a temporary history, uploading FASTA, running MAFFT, downloading output, and deleting the temporary history.
